@@ -1,0 +1,757 @@
+// PPI 1.0 persistence model.
+// Tenant boundary: companyId on every company-owned row.
+// Row Level Security is required on the application database role.
+// This file does not apply policies and is not a migration.
+// Calculated and derived values are absent: comparison, margins,
+// operational cost totals, Cp, Cpk, Copilot signals, learning memory.
+// Economic amounts on an order are snapshots. Master rates may change
+// later and must not be read back into a started or completed order.
+// Cp and Cpk are calculated from 5 valid measurements upward.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleName {
+  OWNER
+  PRODUCTION_MANAGER
+  QUALITY_MANAGER
+  OPERATOR
+}
+
+enum CompanyAppearance {
+  DARK
+  FLOOR
+}
+
+enum OrderPhase {
+  DRAFT
+  IN_PRODUCTION
+  COMPLETED
+  CANCELLED
+}
+
+enum TimeUnit {
+  MINUTE
+  HOUR
+}
+
+enum AuditAction {
+  COMPANY_CREATED
+  COMPANY_CLOSED
+  INVITATION_CREATED
+  INVITATION_ACCEPTED
+  INVITATION_REVOKED
+  ROLE_ASSIGNED
+  ROLE_REVOKED
+  USER_REVOKED
+  LOGIN
+  LOGOUT
+  ORDER_CREATED
+  ORDER_STARTED
+  ORDER_CANCELLED
+  ORDER_START_UNDONE
+  ORDER_COMPLETED
+  ORDER_REOPENED
+  ORDER_COMPLETED_AGAIN
+  ESTIMATE_FROZEN
+  ACTUAL_CORRECTED
+  RESOURCE_RETIRED
+  BREAK_GLASS
+  PRODUCTION_RECORDED
+  SCRAP_RECORDED
+  PAUSE_STARTED
+  PAUSE_ENDED
+  DOWNTIME_STARTED
+  DOWNTIME_ENDED
+  ACTIVE_ORDER_CHANGED
+  TOOL_CHANGED
+  MATERIAL_CONSUMED
+  MACHINE_TIME_RECORDED
+  MACHINE_CHANGED
+  CONTROL_CREATED
+  CONTROL_UPDATED
+  MEASUREMENT_RECORDED
+}
+
+enum AuditSubjectType {
+  COMPANY
+  USER
+  INVITATION
+  ROLE_ASSIGNMENT
+  PRODUCTION_ORDER
+  PART
+  MACHINE
+  TOOL
+  MATERIAL
+}
+
+enum AuditActorKind {
+  USER
+  PLATFORM
+}
+
+model Company {
+  id       String    @id @default(cuid())
+  name     String
+  timeUnit TimeUnit
+  defaultQualityTargetPercent  Decimal @default(90) @db.Decimal(18, 6)
+  defaultWarningDeltaPercent   Decimal @default(2) @db.Decimal(18, 6)
+  defaultCriticalDeltaPercent  Decimal @default(5) @db.Decimal(18, 6)
+  slogan                   String?
+  logoKey                  String?
+  appearance               CompanyAppearance @default(DARK)
+  alarmSoundEnabled        Boolean @default(true)
+  alarmTone                String  @default("pulse")
+  criticalScreenEnabled    Boolean @default(true)
+  closedAt DateTime?
+
+  users                  User[]
+  roleAssignments        RoleAssignment[]
+  invitations            Invitation[]
+  invitationRoles        InvitationRole[]
+  parts                  Part[]
+  productFamilies        ProductFamily[]
+  familyDimensions       FamilyDimension[]
+  articleDimensions      ArticleDimension[]
+  articleTools           ArticleTool[]
+  machines               Machine[]
+  tools                  Tool[]
+  materials              Material[]
+  productionOrders       ProductionOrder[]
+  estimates              Estimate[]
+  estimateToolUses       EstimateToolUse[]
+  estimateMaterialUses   EstimateMaterialUse[]
+  actuals                Actual[]
+  machineTimes           MachineTime[]
+  scraps                 Scrap[]
+  pauses                 Pause[]
+  downtimes              Downtime[]
+  toolChanges            ToolChange[]
+  materialConsumptions   MaterialConsumption[]
+  controlPlans           ControlPlan[]
+  controls               Control[]
+  measurements           Measurement[]
+  drawings               Drawing[]
+  technicalDocuments     TechnicalDocument[]
+  productionNotes        ProductionNote[]
+  certifications         Certification[]
+  auditEvents            AuditEvent[]
+
+  @@index([closedAt])
+}
+
+model User {
+  id                      String    @id @default(cuid())
+  companyId               String
+  email                   String    @unique
+  firstName               String?
+  lastName                String?
+  revokedAt               DateTime?
+  activeProductionOrderId String?
+
+  company               Company          @relation(fields: [companyId], references: [id])
+  activeProductionOrder ProductionOrder? @relation("ActiveOrder", fields: [activeProductionOrderId], references: [id])
+  assignedOrders        ProductionOrder[] @relation("AssignedOperator")
+  roleAssignments       RoleAssignment[]
+  authCredential        AuthCredential?
+
+  @@index([companyId])
+  @@index([activeProductionOrderId])
+}
+
+/// One grant of a role. Revoke sets revokedAt. A later grant is a new row,
+/// so history stays visible. At most one open row per user and role:
+/// unique (userId, role) WHERE revokedAt IS NULL, applied in PostgreSQL.
+/// economicAuthority applies only to PRODUCTION_MANAGER. Owner is always
+/// allowed to write economic values. Operator and Quality Manager never are.
+model RoleAssignment {
+  id                 String    @id @default(cuid())
+  companyId          String
+  userId             String
+  role               RoleName
+  economicAuthority         Boolean   @default(false)
+  qualityThresholdAuthority Boolean   @default(false)
+  assignedAt         DateTime
+  revokedAt          DateTime?
+
+  company Company @relation(fields: [companyId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([companyId, role])
+  @@index([userId, role, revokedAt])
+}
+
+/// Infrastructure for sign-in. Not a business entity and not company-owned data.
+model AuthCredential {
+  userId         String    @id
+  passwordHash   String
+  resetTokenHash String?   @unique
+  resetExpiresAt DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Invitation {
+  id         String    @id @default(cuid())
+  companyId  String
+  email      String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+
+  company Company          @relation(fields: [companyId], references: [id])
+  roles   InvitationRole[]
+
+  @@index([companyId, email])
+  @@index([companyId, expiresAt])
+}
+
+model InvitationRole {
+  id           String   @id @default(cuid())
+  companyId    String
+  invitationId String
+  role         RoleName
+
+  company    Company    @relation(fields: [companyId], references: [id])
+  invitation Invitation @relation(fields: [invitationId], references: [id])
+
+  @@unique([invitationId, role])
+  @@index([companyId])
+}
+
+model Part {
+  id          String    @id @default(cuid())
+  companyId   String
+  /// Article code shown in orders and on the floor.
+  name        String
+  description String?
+  /// bolt, screw, pin, bushing, washer, shaft, bracket, flange, or special.
+  partType     String?
+  familyId     String?
+  /// Legacy snapshot. Article dimensions are the production specification.
+  familyPlan   String?
+  drawingKey   String?
+  drawingName  String?
+  retiredAt   DateTime?
+  hiddenAt    DateTime?
+
+  company          Company            @relation(fields: [companyId], references: [id])
+  family           ProductFamily?     @relation(fields: [familyId], references: [id])
+  dimensions       ArticleDimension[]
+  tools            ArticleTool[]
+  productionOrders ProductionOrder[]
+
+  @@index([companyId, hiddenAt])
+  @@index([companyId, retiredAt])
+}
+
+/// Starting template. Edits apply only to articles created afterwards.
+model ProductFamily {
+  id        String @id @default(cuid())
+  companyId String
+  key       String
+
+  company    Company           @relation(fields: [companyId], references: [id])
+  dimensions FamilyDimension[]
+  parts      Part[]
+
+  @@unique([companyId, key])
+  @@index([companyId])
+}
+
+model FamilyDimension {
+  id            String  @id @default(cuid())
+  companyId     String
+  familyId      String
+  reference     String
+  dimensionName String
+  nominal       Decimal @db.Decimal(18, 6)
+  tolerance     Decimal @db.Decimal(18, 6)
+  toleranceKind String  @default("symmetric")
+  upperDeviation Decimal? @db.Decimal(18, 6)
+  lowerDeviation Decimal? @db.Decimal(18, 6)
+  frequency     Int
+  markerX       Decimal @db.Decimal(18, 6)
+  markerY       Decimal @db.Decimal(18, 6)
+
+  company Company       @relation(fields: [companyId], references: [id])
+  family  ProductFamily @relation(fields: [familyId], references: [id])
+
+  @@unique([familyId, reference])
+  @@index([companyId])
+}
+
+/// Tools assigned to one article code.
+model ArticleTool {
+  id        String @id @default(cuid())
+  companyId String
+  partId    String
+  toolId    String
+
+  company Company @relation(fields: [companyId], references: [id])
+  part    Part    @relation(fields: [partId], references: [id])
+  tool    Tool    @relation(fields: [toolId], references: [id])
+
+  @@unique([partId, toolId])
+  @@index([companyId])
+  @@index([toolId])
+}
+
+/// Production specification owned by one article code.
+model ArticleDimension {
+  id            String  @id @default(cuid())
+  companyId     String
+  partId        String
+  reference     String
+  dimensionName String
+  nominal       Decimal @db.Decimal(18, 6)
+  tolerance     Decimal @db.Decimal(18, 6)
+  toleranceKind  String   @default("symmetric")
+  upperDeviation Decimal? @db.Decimal(18, 6)
+  lowerDeviation Decimal? @db.Decimal(18, 6)
+  lowerLimit    Decimal @db.Decimal(18, 6)
+  upperLimit    Decimal @db.Decimal(18, 6)
+  frequency     Int
+  markerX       Decimal @db.Decimal(18, 6)
+  markerY       Decimal @db.Decimal(18, 6)
+  enabled       Boolean @default(true)
+
+  company Company @relation(fields: [companyId], references: [id])
+  part    Part    @relation(fields: [partId], references: [id])
+
+  @@unique([partId, reference])
+  @@index([companyId])
+}
+
+model Machine {
+  id           String    @id @default(cuid())
+  companyId    String
+  name         String
+  /// Current rate for drafts and future orders. Started orders keep their own snapshot.
+  hourlyRate   Decimal   @db.Decimal(18, 6)
+  retiredAt    DateTime?
+  hiddenAt     DateTime?
+
+  company        Company          @relation(fields: [companyId], references: [id])
+  estimates      Estimate[]
+  machineTimes   MachineTime[]
+  downtimes      Downtime[]
+
+  @@index([companyId, hiddenAt])
+  @@index([companyId, retiredAt])
+}
+
+model Tool {
+  id           String    @id @default(cuid())
+  companyId    String
+  name         String
+  description  String?
+  toolFamily   String?
+  manufacturer String?
+  notes        String?
+  unit         String
+  /// Current unit cost for drafts and future orders. Not stock and not accounting.
+  unitCost  Decimal   @db.Decimal(18, 6)
+  retiredAt DateTime?
+  hiddenAt  DateTime?
+
+  company        Company           @relation(fields: [companyId], references: [id])
+  estimateUses   EstimateToolUse[]
+  toolChanges    ToolChange[]
+  articleTools   ArticleTool[]
+
+  @@index([companyId, hiddenAt])
+  @@index([companyId, retiredAt])
+}
+
+model Material {
+  id        String    @id @default(cuid())
+  companyId String
+  name      String
+  unit      String
+  /// Current unit cost for drafts and future orders. Not stock and not accounting.
+  unitCost  Decimal   @db.Decimal(18, 6)
+  retiredAt DateTime?
+  hiddenAt  DateTime?
+
+  company       Company                @relation(fields: [companyId], references: [id])
+  estimateUses  EstimateMaterialUse[]
+  consumptions  MaterialConsumption[]
+
+  @@index([companyId, hiddenAt])
+  @@index([companyId, retiredAt])
+}
+
+model ProductionOrder {
+  id               String     @id @default(cuid())
+  companyId        String
+  partId           String
+  /// Owner-entered order code. Floor cards keep the last six characters of the id.
+  code             String?
+  assignedOperatorId String?
+  /// Owner grant. When false the operator can view and run the order, not change its rules.
+  operatorCanEdit  Boolean    @default(false)
+  phase            OrderPhase @default(DRAFT)
+  targetQuantity     Int
+  /// Planned calendar start. Distinct from the actual start in startedAt.
+  plannedStartAt     DateTime?
+  /// Planned delivery. Distinct from the actual end in completedAt.
+  plannedDeliveryAt  DateTime?
+  /// Actual start. Set when production starts.
+  startedAt          DateTime?
+  /// Draft becomes active at this instant. Cleared when production starts.
+  scheduledStartAt   DateTime?
+  /// Planner who programmed the automatic start.
+  scheduledStartByUserId String?
+  /// Actual end. Set when the order is completed.
+  completedAt        DateTime?
+  hiddenAt         DateTime?
+
+  company              Company                @relation(fields: [companyId], references: [id])
+  part                 Part                   @relation(fields: [partId], references: [id])
+  assignedOperator     User?                  @relation("AssignedOperator", fields: [assignedOperatorId], references: [id])
+  activeForUsers       User[]                 @relation("ActiveOrder")
+  /// Exactly one in the domain. Prisma cannot require a child row, so the
+  /// field is optional here. The order is valid only when this row exists.
+  /// Create the order and its Estimate in the same write.
+  estimate             Estimate?
+  actual               Actual?
+  scraps               Scrap[]
+  pauses               Pause[]
+  downtimes            Downtime[]
+  toolChanges          ToolChange[]
+  materialConsumptions MaterialConsumption[]
+  machineTimes         MachineTime[]
+  controlPlan          ControlPlan?
+  drawings             Drawing[]
+  technicalDocuments   TechnicalDocument[]
+  productionNotes      ProductionNote[]
+  certifications       Certification[]
+  measurements         Measurement[]
+
+  @@unique([companyId, code])
+  @@index([companyId, phase])
+  @@index([companyId, partId, phase])
+  @@index([companyId, hiddenAt])
+  @@index([companyId, phase, scheduledStartAt])
+}
+
+model Estimate {
+  id                    String    @id @default(cuid())
+  companyId             String
+  productionOrderId     String    @unique
+  timePerPiece           Decimal?  @db.Decimal(18, 6)
+  expectedScrap          Decimal?  @db.Decimal(18, 6)
+  machineId              String?
+  /// Copied from Machine.hourlyRate when production starts. Immutable after that.
+  hourlyRateSnapshot     Decimal?  @db.Decimal(18, 6)
+  otherOperationalCost   Decimal?  @db.Decimal(18, 6)
+  /// Order-level anchor for margin. Margin itself is calculated and not stored.
+  agreedOperationalValue Decimal?  @db.Decimal(18, 6)
+  /// Per-order process quality target. Not a company-wide threshold.
+  qualityTargetPercent   Decimal?  @db.Decimal(18, 6)
+  /// Subtracted from the target to obtain the warning threshold.
+  warningDeltaPercent    Decimal?  @db.Decimal(18, 6)
+  /// Subtracted from the target to obtain the critical threshold.
+  criticalDeltaPercent       Decimal?  @db.Decimal(18, 6)
+  /// When true, company defaults replace any stored order thresholds.
+  useCompanyQualityDefaults  Boolean   @default(true)
+
+  company         Company                @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder        @relation(fields: [productionOrderId], references: [id])
+  machine         Machine?               @relation(fields: [machineId], references: [id])
+  toolUses        EstimateToolUse[]
+  materialUses    EstimateMaterialUse[]
+
+  @@index([companyId])
+  @@index([machineId])
+}
+
+model EstimateToolUse {
+  id         String  @id @default(cuid())
+  companyId  String
+  estimateId String
+  toolId     String
+  quantity   Decimal @db.Decimal(18, 6)
+  /// Economic unit cost used by this order. Frozen when production starts.
+  unitCost   Decimal @db.Decimal(18, 6)
+
+  company  Company  @relation(fields: [companyId], references: [id])
+  estimate Estimate @relation(fields: [estimateId], references: [id])
+  tool     Tool     @relation(fields: [toolId], references: [id])
+
+  @@unique([estimateId, toolId])
+  @@index([companyId])
+}
+
+model EstimateMaterialUse {
+  id         String  @id @default(cuid())
+  companyId  String
+  estimateId String
+  materialId String
+  quantity   Decimal @db.Decimal(18, 6)
+  /// Economic unit cost used by this order. Frozen when production starts.
+  unitCost   Decimal @db.Decimal(18, 6)
+
+  company  Company  @relation(fields: [companyId], references: [id])
+  estimate Estimate @relation(fields: [estimateId], references: [id])
+  material Material @relation(fields: [materialId], references: [id])
+
+  @@unique([estimateId, materialId])
+  @@index([companyId])
+}
+
+model Actual {
+  id                String @id @default(cuid())
+  companyId         String
+  productionOrderId String @unique
+  goodQuantity      Int    @default(0)
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  @@index([companyId])
+}
+
+model MachineTime {
+  id                   String    @id @default(cuid())
+  companyId            String
+  productionOrderId    String
+  machineId            String
+  /// Rate used for these hours. Never refreshed from Machine.hourlyRate.
+  hourlyRateSnapshot   Decimal   @db.Decimal(18, 6)
+  startedAt            DateTime
+  endedAt              DateTime?
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  machine         Machine         @relation(fields: [machineId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId, startedAt])
+  @@index([machineId])
+}
+
+model Scrap {
+  id                String   @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  pieceCount        Int
+  occurredAt        DateTime
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId, occurredAt])
+}
+
+model Pause {
+  id                String    @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  startedAt         DateTime
+  endedAt           DateTime?
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId, startedAt])
+}
+
+model Downtime {
+  id                String    @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  machineId         String
+  startedAt         DateTime
+  endedAt           DateTime?
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  machine         Machine         @relation(fields: [machineId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId, startedAt])
+  @@index([machineId, startedAt])
+}
+
+model ToolChange {
+  id                String   @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  toolId            String
+  quantity          Decimal  @db.Decimal(18, 6)
+  /// Copied from the order snapshot. If this tool was not estimated, copied once at the event and then immutable.
+  unitCost          Decimal  @db.Decimal(18, 6)
+  occurredAt        DateTime
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  tool            Tool            @relation(fields: [toolId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId, occurredAt])
+  @@index([toolId])
+}
+
+model MaterialConsumption {
+  id                String   @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  materialId        String
+  quantity          Decimal  @db.Decimal(18, 6)
+  /// Copied from the order snapshot. If this material was not estimated, copied once at the event and then immutable.
+  unitCost          Decimal  @db.Decimal(18, 6)
+  occurredAt        DateTime
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  material        Material        @relation(fields: [materialId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId, occurredAt])
+  @@index([materialId])
+}
+
+model ControlPlan {
+  id                String @id @default(cuid())
+  companyId         String
+  productionOrderId String @unique
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  controls        Control[]
+
+  @@index([companyId])
+}
+
+model Control {
+  id            String  @id @default(cuid())
+  companyId     String
+  controlPlanId String
+  name          String
+  nominal       Decimal  @db.Decimal(18, 6)
+  toleranceKind  String   @default("symmetric")
+  upperDeviation Decimal? @db.Decimal(18, 6)
+  lowerDeviation Decimal? @db.Decimal(18, 6)
+  lowerLimit    Decimal  @db.Decimal(18, 6)
+  upperLimit    Decimal  @db.Decimal(18, 6)
+  frequency     Int      @default(0)
+  markerX       Decimal? @db.Decimal(18, 6)
+  markerY       Decimal? @db.Decimal(18, 6)
+
+  company     Company      @relation(fields: [companyId], references: [id])
+  controlPlan ControlPlan  @relation(fields: [controlPlanId], references: [id])
+  measurements Measurement[]
+
+  @@index([companyId])
+  @@index([controlPlanId])
+}
+
+/// A value against one control. Cp and Cpk are not stored.
+/// They are calculated from 5 valid measurements: 5-9 low, 10-19 medium, 20-29 good, 30 or more high.
+model Measurement {
+  id                String   @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  controlId         String
+  value             Decimal  @db.Decimal(18, 6)
+  recordedAt        DateTime
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  control         Control         @relation(fields: [controlId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId, recordedAt])
+  @@index([controlId])
+}
+
+model Drawing {
+  id                String   @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  storageKey        String
+  fileName          String
+  addedAt           DateTime
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId])
+}
+
+model TechnicalDocument {
+  id                String   @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  storageKey        String
+  fileName          String
+  addedAt           DateTime
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId])
+}
+
+model ProductionNote {
+  id                String   @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  body              String
+  addedAt           DateTime
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId])
+}
+
+/// Order output. Allowed on an in-production order and on a completed order.
+/// It does not change Estimate, Actual, margin, or learning.
+model Certification {
+  id                String   @id @default(cuid())
+  companyId         String
+  productionOrderId String
+  storageKey        String
+  fileName          String
+  addedAt           DateTime
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId])
+}
+
+model AuditEvent {
+  id              String           @id @default(cuid())
+  companyId       String
+  actorKind       AuditActorKind
+  actorUserId     String?
+  action          AuditAction
+  subjectType     AuditSubjectType
+  subjectId       String
+  occurredAt      DateTime
+  breakGlassReason String?
+  breakGlassUntil  DateTime?
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId, occurredAt])
+  @@index([companyId, subjectType, subjectId])
+}

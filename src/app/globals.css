@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@keyframes ppi-glow {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes ppi-wave {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes ppi-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes ppi-work-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+@keyframes ppi-alert-pulse {
+  0%, 100% { box-shadow: 0 0 0 6px rgba(255, 77, 79, 0.55); }
+  50% { box-shadow: 0 0 0 12px rgba(255, 77, 79, 0.95); }
+}
+
+.ppi-critical-radiate {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 210%;
+  height: 210%;
+  background: radial-gradient(circle at center, rgba(255, 77, 79, 0.46) 0%, rgba(255, 77, 79, 0.2) 40%, rgba(255, 77, 79, 0.08) 62%, transparent 84%);
+  animation: ppi-critical-radiate 4.2s ease-in-out infinite;
+}
+
+.ppi-critical-dots {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.55) 0.6px, transparent 0.75px);
+  background-size: 18px 18px;
+  opacity: 0.22;
+}
+
+@keyframes ppi-critical-radiate {
+  0%, 100% { transform: translate(-50%, -50%) scale(0.74); opacity: 0.58; }
+  50% { transform: translate(-50%, -50%) scale(1); opacity: 0.95; }
+}
+
+@keyframes ppi-soft-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.18); }
+  50% { box-shadow: 0 0 16px 0 rgba(255, 77, 79, 0.28); }
+}
+
+@keyframes ppi-score {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+[data-appearance="dark"] {
+  --ppi-canvas: #040b16;
+}
+
+[data-appearance="floor"] {
+  --ppi-canvas: #2a3c58;
+}
+
+body {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  background: #f6f5f2;
+  color: #1c1917;
+}

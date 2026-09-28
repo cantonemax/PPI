@@ -1,0 +1,1 @@
+ALTER TABLE "ProductionOrder" ADD COLUMN IF NOT EXISTS "operatorCanEdit" BOOLEAN NOT NULL DEFAULT false;
