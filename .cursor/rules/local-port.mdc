@@ -1,0 +1,9 @@
+---
+description: PPI locale sempre sulla porta 3002
+alwaysApply: true
+---
+
+# Porta locale PPI
+
+- Dev server, browser e URL di verifica: sempre `http://localhost:3002`.
+- Avvia con `npm run dev` (script già su porta 3002). Non usare la porta 3000.

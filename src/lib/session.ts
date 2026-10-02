@@ -7,6 +7,7 @@ export type SessionPayload = {
   sub: string;
   companyId: string;
   email: string;
+  kind?: "member" | "platform";
 };
 
 function secret(): Uint8Array {
@@ -34,7 +35,12 @@ export async function readSession(): Promise<SessionPayload | null> {
     if (!payload.sub || typeof payload.companyId !== "string" || typeof payload.email !== "string") {
       return null;
     }
-    return { sub: payload.sub, companyId: payload.companyId, email: payload.email };
+    return {
+      sub: payload.sub,
+      companyId: payload.companyId,
+      email: payload.email,
+      kind: payload.kind === "platform" ? "platform" : "member",
+    };
   } catch {
     return null;
   }

@@ -6,6 +6,7 @@ import { readSession } from "@/lib/session";
 export async function requireMember() {
   const session = await readSession();
   if (!session) redirect("/login");
+  if (session.kind === "platform") redirect("/platform");
 
   const user = await withTenant(session.companyId, (tx) => tx.user.findFirst({
     where: {
@@ -35,3 +36,6 @@ export function hasRole(roles: { role: RoleName }[], role: RoleName): boolean {
 export function canSeeEconomics(roles: { role: RoleName; economicAuthority: boolean }[]): boolean {
   return roles.some((item) => item.role === RoleName.OWNER || (item.role === RoleName.PRODUCTION_MANAGER && item.economicAuthority));
 }
+
+/** Re-export client-safe voice policy (OWNER-only). See @/lib/voice-policy. */
+export { canUseVoiceControl } from "@/lib/voice-policy";

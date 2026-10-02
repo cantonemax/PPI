@@ -6,7 +6,9 @@ export default defineConfig({
   test: {
     environment: "node",
     fileParallelism: false,
-    setupFiles: ["./tests/setup.ts"],
+    isolate: false,
+    maxWorkers: 1,
+    setupFiles: ["./tests/next-mocks.ts", "./tests/setup.ts"],
   },
   resolve: {
     alias: { "@": path.resolve("src") },

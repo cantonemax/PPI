@@ -137,7 +137,15 @@ export async function recordMeasurement(_state: string | null, formData: FormDat
     const quality = hasRole(member.activeRoles, RoleName.QUALITY_MANAGER) || hasRole(member.activeRoles, RoleName.OWNER);
     if (!quality) {
       const user = await tx.user.findFirst({ where: { id: member.user.id, companyId: member.session.companyId } });
-      if (user?.activeProductionOrderId !== order.id) return true;
+      const onThisOrder = user?.activeProductionOrderId === order.id || order.assignedOperatorId === member.user.id || order.assignedOperatorId === null;
+      if (!user || !onThisOrder) return true;
+      if (user.activeProductionOrderId !== order.id) {
+        await tx.user.updateMany({
+          where: { companyId: member.session.companyId, activeProductionOrderId: order.id, id: { not: user.id } },
+          data: { activeProductionOrderId: null },
+        });
+        await tx.user.update({ where: { id: user.id }, data: { activeProductionOrderId: order.id } });
+      }
     }
     const created = await tx.measurement.create({
       data: {
@@ -160,5 +168,29 @@ export async function recordMeasurement(_state: string | null, formData: FormDat
   if (failed) return "quality.notInProduction";
   revalidatePath("/dashboard/quality");
   revalidatePath("/dashboard/operator");
+  return null;
+}
+
+export async function resetOrderMeasurements(orderId: string): Promise<string | null> {
+  const member = await requireMeasure();
+  if (!orderId) return "quality.notInProduction";
+  const failed = await withTenant(member.session.companyId, async (tx) => {
+    const order = await tx.productionOrder.findFirst({
+      where: { id: orderId, companyId: member.session.companyId, hiddenAt: null, phase: OrderPhase.IN_PRODUCTION },
+    });
+    if (!order) return true;
+    const quality = hasRole(member.activeRoles, RoleName.QUALITY_MANAGER) || hasRole(member.activeRoles, RoleName.OWNER);
+    if (!quality) {
+      const user = await tx.user.findFirst({ where: { id: member.user.id, companyId: member.session.companyId } });
+      const onThisOrder = user?.activeProductionOrderId === order.id || order.assignedOperatorId === member.user.id || order.assignedOperatorId === null;
+      if (!user || !onThisOrder) return true;
+    }
+    await tx.measurement.deleteMany({ where: { companyId: member.session.companyId, productionOrderId: order.id } });
+    return false;
+  });
+  if (failed) return "quality.notInProduction";
+  revalidatePath("/dashboard/quality");
+  revalidatePath("/dashboard/operator");
+  revalidatePath("/dashboard/floor");
   return null;
 }

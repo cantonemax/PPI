@@ -24,6 +24,7 @@ export default async function OperatorOrderPage({ params, searchParams }: { para
     const machineId = current?.activeProductionOrder?.machineTimes[0]?.machineId ?? null;
     const visible: Prisma.ProductionOrderWhereInput[] = [
       { assignedOperatorId: owner ? { not: null } : user.id },
+      { assignedOperatorId: null },
       { id: orderId, phase: OrderPhase.COMPLETED },
     ];
     if (machineId) visible.push({ estimate: { is: { machineId } } });

@@ -12,7 +12,7 @@ export default function LoginPage() {
       <p className="text-sm text-stone-500">{t("product.tagline")}</p>
       <h1 className="mt-2 text-3xl">{t("product.name")}</h1>
       <form action={action} className="mt-8 flex flex-col gap-3">
-        <label className="text-sm">{t("auth.email")}<input name="email" type="email" required className="mt-1 w-full border border-stone-300 bg-white px-3 py-2" /></label>
+        <label className="text-sm">{t("auth.loginId")}<input name="email" type="text" autoComplete="username" required className="mt-1 w-full border border-stone-300 bg-white px-3 py-2" /></label>
         <label className="text-sm">{t("auth.password")}<input name="password" type="password" required className="mt-1 w-full border border-stone-300 bg-white px-3 py-2" /></label>
         {state ? <p className="text-sm text-red-700">{t(state)}</p> : null}
         <button disabled={pending} className="bg-stone-900 px-4 py-2 text-white">{t("auth.signIn")}</button>

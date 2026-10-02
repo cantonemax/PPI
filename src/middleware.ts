@@ -6,6 +6,19 @@ import { isServicePaused } from "@/lib/service-phase";
 const protectedPaths = ["/dashboard", "/users"];
 
 export async function middleware(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/platform") && request.nextUrl.pathname !== "/platform/login") {
+    const token = request.cookies.get("ppi_session")?.value;
+    const secret = process.env.AUTH_SECRET;
+    if (!token || !secret) return NextResponse.redirect(new URL("/platform/login", request.url));
+    try {
+      const { payload } = await jwtVerify(token, new TextEncoder().encode(secret));
+      if (payload.kind !== "platform") return NextResponse.redirect(new URL("/platform/login", request.url));
+    } catch {
+      return NextResponse.redirect(new URL("/platform/login", request.url));
+    }
+    return NextResponse.next();
+  }
+
   const isProtected = protectedPaths.some((path) => request.nextUrl.pathname.startsWith(path));
   if (!isProtected) return NextResponse.next();
 
@@ -31,4 +44,4 @@ export async function middleware(request: NextRequest) {
   return NextResponse.next();
 }
 
-export const config = { matcher: ["/dashboard/:path*", "/users/:path*"] };
+export const config = { matcher: ["/dashboard/:path*", "/users/:path*", "/platform", "/platform/:path*"] };

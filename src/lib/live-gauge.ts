@@ -128,19 +128,31 @@ export async function loadFloorStations(companyId: string): Promise<FloorStation
         activeProductionOrder: {
           include: {
             part: true,
+            estimate: { include: { machine: true } },
             machineTimes: { where: { endedAt: null }, include: { machine: true }, orderBy: { startedAt: "desc" } },
           },
         },
       },
     });
+    const running = await tx.productionOrder.findMany({
+      where: { companyId, hiddenAt: null, phase: OrderPhase.IN_PRODUCTION },
+      orderBy: { startedAt: "desc" },
+      include: {
+        part: true,
+        estimate: { include: { machine: true } },
+        machineTimes: { where: { endedAt: null }, include: { machine: true }, orderBy: { startedAt: "desc" } },
+      },
+    });
     return users
       .map((user) => {
-        const order = user.activeProductionOrder;
-        const live = order && order.companyId === companyId && order.phase === OrderPhase.IN_PRODUCTION ? order : null;
+        const pinned = user.activeProductionOrder;
+        const live = pinned && pinned.companyId === companyId && pinned.phase === OrderPhase.IN_PRODUCTION
+          ? pinned
+          : running.find((order) => order.assignedOperatorId === user.id || order.assignedOperatorId === null) ?? null;
         return {
           userId: user.id,
           name: personName(user),
-          machine: live?.machineTimes[0]?.machine.name ?? "",
+          machine: live?.machineTimes[0]?.machine.name || live?.estimate?.machine?.name || "",
           orderCode: live ? live.id.slice(-6).toUpperCase() : "",
           part: live?.part.name ?? "",
         };
@@ -165,8 +177,25 @@ export async function loadCockpitSnapshot(companyId: string, userId: string): Pr
         },
       },
     });
-    const order = user?.activeProductionOrder;
-    if (!order || order.companyId !== companyId || order.phase !== OrderPhase.IN_PRODUCTION) return null;
+    const pinned = user?.activeProductionOrder;
+    const order = pinned && pinned.companyId === companyId && pinned.phase === OrderPhase.IN_PRODUCTION
+      ? pinned
+      : await tx.productionOrder.findFirst({
+          where: {
+            companyId,
+            hiddenAt: null,
+            phase: OrderPhase.IN_PRODUCTION,
+            OR: [{ assignedOperatorId: userId }, { assignedOperatorId: null }],
+          },
+          orderBy: { startedAt: "desc" },
+          include: {
+            ...orderGaugeInclude,
+            drawings: { orderBy: { addedAt: "desc" }, take: 1 },
+            machineTimes: { include: { machine: true }, orderBy: { startedAt: "desc" } },
+            estimate: { include: { toolUses: true, machine: true } },
+          },
+        });
+    if (!order) return null;
     const open = order.machineTimes.find((interval) => interval.endedAt === null);
     const assignedMachine = open?.machine.name || order.machineTimes[0]?.machine.name || order.estimate?.machine?.name || "";
     const scrap = order.scraps.reduce((sum, item) => sum + item.pieceCount, 0);

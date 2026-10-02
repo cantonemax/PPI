@@ -55,6 +55,7 @@ const nav = [
   { href: "/dashboard/materials", key: "nav.materials", icon: "box" },
   { href: "/dashboard/tools", key: "nav.tools", icon: "tool" },
   { href: "/dashboard/machines", key: "nav.machines", icon: "machine" },
+  { href: "/dashboard/operators", key: "setup.operator", icon: "people" },
   { href: "/dashboard/users", key: "nav.users", icon: "people" },
   { href: "/dashboard/company", key: "nav.companySettings", icon: "settings" },
 ];
@@ -99,30 +100,31 @@ export function OwnerHome({
     <OwnerFrame companyName={companyName} today={today} person={person} activeHref="/dashboard">
         <div className="grid gap-3 px-3 py-3 min-[1440px]:grid-cols-[minmax(0,1fr)_300px]">
           <div className="grid gap-3">
-            <section className={`${shell} grid h-[320px] grid-cols-[minmax(180px,300px)_repeat(6,minmax(0,1fr))] gap-2 p-3`}>
-              <div className="relative h-[280px] overflow-hidden rounded-xl border border-white/15 bg-[#050d18] shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_18px_50px_rgba(0,0,0,0.45),0_0_42px_rgba(60,240,255,0.14)]">
+            <section className={`${shell} grid items-stretch gap-2 p-3 lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]`}>
+              <div className="relative h-full min-h-[280px] overflow-hidden rounded-xl border border-white/15 bg-[#050d18] shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_18px_50px_rgba(0,0,0,0.45),0_0_42px_rgba(60,240,255,0.14)]">
                 <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_70%_0%,rgba(60,240,255,0.2),transparent_46%)]" style={{ animation: "ppi-glow 4.5s ease-in-out infinite" }} />
                 <span className="pointer-events-none absolute -left-8 bottom-0 h-28 w-40 rounded-full blur-3xl" style={{ background: tone.wash }} />
                 <InfoTip title={t("dashboard.process")} text={t("dashboard.hint.process")} />
-                <Link href="/dashboard/process" className="relative flex h-full flex-col justify-between p-3">
+                <Link href="/dashboard/process" className="relative flex h-full min-h-[280px] flex-col justify-between p-4">
                   <div>
-                    <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-cyan-300/80">{t("dashboard.process")}</p>
+                    <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-cyan-300/80">{t("dashboard.process")}</p>
                     <p className="mt-3 flex items-center gap-3 text-[36px] font-semibold uppercase leading-none tracking-[0.06em]" style={{ color: tone.hex, textShadow: `0 0 24px ${tone.hex}` }}>
                       <StatusMark color={tone.hex} />
                       {status === "critical" ? t("dashboard.processWord.critical") : status === "attention" ? t("dashboard.processWord.attention") : t("dashboard.processWord.stable")}
                     </p>
                     <p className="mt-3 text-[12px] font-medium uppercase tracking-[0.08em] text-slate-200">{processSummary(signals)}</p>
                   </div>
-                  <p className="text-[13px] font-semibold uppercase tracking-[0.14em]" style={{ color: tone.hex }}>{status === "critical" ? t("process.trend.degrading") : t("process.trend.stable")}</p>
                   <p className="text-[11px] uppercase tracking-[0.08em] text-slate-400">{`${mosaic.machines} ${t("process.machinesOrders")} · ${mosaic.orders} ${t("process.ordersWord")}`}</p>
                 </Link>
               </div>
+              <div className="grid grid-cols-3 gap-2">
               <Tile hint={t("dashboard.hint.quality")} label={t("dashboard.slot.quality")} value={qualityScore(mosaic.quality)} status={qualityOperationalStatus(mosaic.quality, mosaic.qualityTarget, mosaic.qualityWarning, mosaic.qualityDelta)} tone={qualityOperationalTone(mosaic.quality, mosaic.qualityTarget, mosaic.qualityWarning, mosaic.qualityDelta)} points={qualityPoints} note={qualityNote(mosaic.quality, mosaic.qualityTarget, mosaic.qualityWarning, mosaic.qualityDelta)} ring={qualityRing(mosaic.quality)} />
               <Tile hint={t("dashboard.hint.scrap")} label={t("dashboard.slot.scrap")} value={mosaic.scrap ?? t("dashboard.noData")} status={scrapStatus(signals)} tone={scrapTone(signals)} points={mosaic.scrapRiskSeries} gauge={gaugeOf(mosaic.scrap)} note={scrapNote(mosaic.scrapProduced, mosaic.scrapPieces)} ring={riskRing(gaugeOf(mosaic.scrap))} />
               <Tile hint={t("dashboard.hint.efficiency")} label={t("dashboard.slot.production")} value={efficiencyPrimary(mosaic.efficiency)} status={efficiencyStatus(mosaic.efficiency.ratio)} tone={efficiencyTone(mosaic.efficiency.ratio)} note={efficiencyNote(mosaic.efficiency, mosaic.timeUnit)} points={mosaic.efficiencySeries} ring={efficiencyRing(mosaic.efficiency.percent)} />
               <Tile hint={t("dashboard.hint.tools")} label={t("dashboard.slot.tools")} value={String(mosaic.tools)} status={toolStatus(signals, mosaic.tools)} tone={toolTone(signals, mosaic.tools)} points={mosaic.toolTrend} note={toolNote(mosaic.toolActive, mosaic.toolReplaced)} ring={riskRing(mosaic.toolRisk)} />
               <Tile hint={t("dashboard.hint.materials")} label={t("dashboard.slot.materials")} value={mosaic.materialCoverage === null ? t("dashboard.noData") : `${Math.round(mosaic.materialCoverage)}%`} status={materialStatus(signals)} tone={materialTone(signals)} points={mosaic.materialTrend} relative note={materialNote(mosaic.materialRemaining, mosaic.materialUsed, mosaic.materialUnit)} ring={coverageRing(mosaic.materialCoverage)} />
               <Tile hint={t("dashboard.hint.delivery")} label={t("dashboard.slot.delivery")} value={mosaic.delivery === null ? t("dashboard.noData") : `${mosaic.delivery.percent}%`} status={mosaic.delivery === null ? t("dashboard.kpi.empty") : t(`dashboard.kpiLabel.delivery.${mosaic.delivery.band === "high" ? "high" : mosaic.delivery.band === "moderate" ? "moderate" : "low"}`)} tone={mosaic.delivery === null ? "monitor" : mosaic.delivery.band === "high" ? "good" : mosaic.delivery.band === "moderate" ? "moderate" : "severe"} points={mosaic.delivery === null ? [] : mosaic.deliveryTrend} note={deliveryNote(mosaic.delivery)} ring={mosaic.delivery === null ? null : riskRing(mosaic.delivery.percent)} />
+              </div>
             </section>
             <DepartmentGauge machines={department} />
             <section className="grid grid-cols-3 gap-3">
@@ -388,12 +390,12 @@ export function Tile({ hint, label, value, status, tone, points, note = "", gaug
     <div className="relative flex h-[280px] flex-col overflow-hidden rounded-xl border border-white/[0.05] bg-gradient-to-b from-white/[0.035] to-transparent p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
       <span className="pointer-events-none absolute inset-x-3 top-0 h-px bg-cyan-200/30" />
       <InfoTip title={label} text={hint} />
-      <p className="h-8 shrink-0 whitespace-pre-line text-center text-[11px] font-medium uppercase leading-4 tracking-[0.22em] text-slate-500">{label}</p>
+      <p className="min-h-8 shrink-0 whitespace-pre-line text-center text-[11px] font-medium uppercase leading-4 tracking-[0.08em] text-slate-400">{label}</p>
       <div className="mt-3 flex h-12 shrink-0 items-center justify-between gap-2">
         <p className="text-[30px] font-semibold leading-none tracking-tight text-white">{missing ? "" : value}</p>
         <Instrument color={ringColor} fill={ringFill} />
       </div>
-      <p className="mt-4 h-5 shrink-0 text-center text-[13px] font-semibold uppercase leading-5 tracking-[0.16em]" style={{ color }}>{statusText}</p>
+      <p className="mt-3 min-h-5 shrink-0 text-center text-[13px] font-semibold uppercase leading-5 tracking-[0.06em]" style={{ color }}>{statusText}</p>
       <div className="mt-4 min-h-0 flex-1">{unavailable ? null : <KpiTrend points={points} delta={gap !== undefined ? gap : seriesDelta(points, relative)} color={chart} id={label} />}</div>
       <p className="h-8 shrink-0 truncate whitespace-nowrap pt-3 text-center text-[11px] leading-4 text-slate-400">{!missing && note ? note : ""}</p>
     </div>

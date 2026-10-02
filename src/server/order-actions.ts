@@ -148,6 +148,7 @@ export async function createDraftOrder(_state: string | null, formData: FormData
           create: {
             companyId: member.session.companyId,
             useCompanyQualityDefaults: true,
+            timePerPiece: decimalOrNull(formData.get("timePerPiece")),
           },
         },
       },
@@ -560,7 +561,21 @@ export async function updateDraftOrder(_state: string | null, formData: FormData
 
 async function beginOrder(orderId: string, requireTime: boolean) {
   const member = await requirePlanner();
-  return withTenant(member.session.companyId, (tx) => activateDraft(tx, member.session.companyId, orderId, member.user.id, requireTime));
+  return withTenant(member.session.companyId, async (tx) => {
+    const error = await activateDraft(tx, member.session.companyId, orderId, member.user.id, requireTime);
+    if (error) return error;
+    const order = await tx.productionOrder.findFirst({
+      where: { id: orderId, companyId: member.session.companyId },
+      select: { assignedOperatorId: true },
+    });
+    const deskUserId = order?.assignedOperatorId ?? member.user.id;
+    await tx.user.updateMany({
+      where: { companyId: member.session.companyId, activeProductionOrderId: orderId, id: { not: deskUserId } },
+      data: { activeProductionOrderId: null },
+    });
+    await tx.user.update({ where: { id: deskUserId }, data: { activeProductionOrderId: orderId } });
+    return null;
+  });
 }
 
 export async function scheduleOrderStart(formData: FormData): Promise<void> {
@@ -615,6 +630,8 @@ export async function startOrder(formData: FormData): Promise<void> {
   const orderId = String(formData.get("orderId") ?? "");
   const error = await beginOrder(orderId, true);
   revalidatePath(`/dashboard/orders/${orderId}`);
+  revalidatePath("/dashboard/operator");
+  revalidatePath("/dashboard/floor");
   redirect(error ? `/dashboard/orders/${orderId}?error=${error}` : `/dashboard/orders/${orderId}`);
 }
 

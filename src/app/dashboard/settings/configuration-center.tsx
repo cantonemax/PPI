@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useState, type ReactNode } from "react";
 import { InfoTip } from "@/app/dashboard/info-tip";
@@ -291,6 +291,10 @@ export function ConfigurationCenter({
           <ToggleCard label={t("config.operator.drawing")} help={t("config.operator.drawing.help")} on={operation.showDrawing} onChange={(showDrawing) => patchOperation({ showDrawing })} />
           <ToggleCard label={t("config.operator.confirm")} help={t("config.operator.confirm.help")} on={operation.autoConfirm} onChange={(autoConfirm) => patchOperation({ autoConfirm })} />
         </div>
+        <p className="text-[12px] leading-5 text-slate-500">
+          <span className="font-medium uppercase tracking-[0.12em] text-slate-400">{t("config.voice")}. </span>
+          {t("config.voice.note")}
+        </p>
       </section>
 
       {notice ? <p className="text-center text-[13px] text-[#00E676]">{t(notice)}</p> : null}

@@ -430,7 +430,8 @@ export async function operatorStartOrder(formData: FormData): Promise<void> {
       where: { id: orderId, companyId: member.session.companyId, phase: OrderPhase.DRAFT, hiddenAt: null },
       include: { estimate: true },
     });
-    if (!order?.estimate || order.assignedOperatorId !== member.user.id) return "common.required";
+    if (!order?.estimate) return "common.required";
+    if (order.assignedOperatorId && order.assignedOperatorId !== member.user.id) return "common.required";
     const failed = await activateDraft(tx, member.session.companyId, order.id, member.user.id, false);
     if (failed) return failed;
     await tx.user.update({ where: { id: member.user.id }, data: { activeProductionOrderId: order.id } });

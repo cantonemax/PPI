@@ -1,0 +1,12 @@
+---
+description: Le schermate PPI si adattano alla finestra del PC
+alwaysApply: true
+---
+
+# Adattamento allo schermo
+
+Ogni schermata usa l’altezza e la larghezza della finestra del PC. Non usare altezze fisse in pixel che tagliano il fondo.
+
+- Postazione a una schermata (operatore, videata reparto): guscio `ppi-screen`, contenuto in `ppi-screen-body`. Le card riempiono lo spazio con flex o griglia `minmax(0,1fr)`. Il figlio usa `h-full min-h-0`, non un nuovo `100dvh`.
+- Pagine lunghe (dashboard, elenchi): `min-h-dvh` e scorrimento della pagina. Non mettere `overflow-hidden` sul guscio se nasconde contenuto sotto il bordo.
+- Vietato `minHeight` in pixel sulle card della postazione operatore.

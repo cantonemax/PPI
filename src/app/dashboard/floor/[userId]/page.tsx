@@ -24,7 +24,7 @@ export default async function FloorWatchPage({ params }: { params: Promise<{ use
   const snapshot = await loadCockpitSnapshot(session.companyId, station.id);
   const name = personName(station) || t("users.role.OPERATOR");
   return (
-    <div className="flex h-dvh flex-col bg-stone-100 text-stone-950">
+    <div className="ppi-screen bg-stone-100 text-stone-950">
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 px-4">
         <div className="flex min-w-0 items-center gap-4">
           <Link href="/dashboard/floor" className="inline-flex min-h-14 shrink-0 items-center gap-2 text-base">
@@ -39,7 +39,7 @@ export default async function FloorWatchPage({ params }: { params: Promise<{ use
           <p className="rounded-full border border-stone-300 px-3 py-1 text-[13px]">{todayLabel()}</p>
         </div>
       </header>
-      <div className="min-h-0 flex-1 px-4 pb-4">
+      <div className="ppi-screen-body px-4 pb-4">
         <Cockpit snapshot={snapshot} readOnly alarmSound={false} criticalScreen={user.company.criticalScreenEnabled} />
       </div>
     </div>

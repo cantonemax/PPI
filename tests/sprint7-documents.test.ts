@@ -69,9 +69,24 @@ describe("sprint 7 documents", () => {
     }
     await call(() => createPart(null, form({ name: "PERNO" })));
     const part = await prisma.part.findFirstOrThrow({ where: { name: "PERNO" } });
+    let orderSeq = 0;
     const make = async () => {
-      await call(() => createDraftOrder(null, form({ partId: part.id, targetQuantity: "10", timePerPiece: "1" })));
-      return (await prisma.productionOrder.findFirstOrThrow({ where: { partId: part.id }, orderBy: { id: "desc" } })).id;
+      orderSeq += 1;
+      const code = `DOC-${orderSeq}`;
+      await call(() =>
+        createDraftOrder(
+          null,
+          form({
+            code,
+            partId: part.id,
+            targetQuantity: "10",
+            timePerPiece: "1",
+            plannedStart: "2026-01-01",
+            plannedDelivery: "2026-01-10",
+          }),
+        ),
+      );
+      return (await prisma.productionOrder.findFirstOrThrow({ where: { partId: part.id, code }, orderBy: { id: "desc" } })).id;
     };
     draftId = await make();
     productionId = await make();

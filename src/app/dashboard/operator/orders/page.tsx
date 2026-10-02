@@ -27,10 +27,13 @@ export default async function OperatorOrdersPage() {
         companyId: session.companyId,
         hiddenAt: null,
         phase: { in: [OrderPhase.DRAFT, OrderPhase.IN_PRODUCTION] },
-        OR: [
-          { assignedOperatorId: owner ? { not: null } : user.id },
-          ...(machineId ? [{ estimate: { is: { machineId } } }] : []),
-        ],
+        ...(owner ? {} : {
+          OR: [
+            { assignedOperatorId: user.id },
+            { assignedOperatorId: null },
+            ...(machineId ? [{ estimate: { is: { machineId } } }] : []),
+          ],
+        }),
       },
       include: { part: true, estimate: { include: { machine: true } } },
       orderBy: [{ phase: "asc" }, { startedAt: "desc" }],
@@ -38,12 +41,14 @@ export default async function OperatorOrdersPage() {
     return { machineId, orders };
   });
   const mine = rows.orders.filter((order) => order.assignedOperatorId === user.id);
+  const open = rows.orders.filter((order) => !order.assignedOperatorId);
   const sent = owner ? rows.orders.filter((order) => order.assignedOperatorId && order.assignedOperatorId !== user.id) : [];
-  const onMachine = rows.orders.filter((order) => order.assignedOperatorId !== user.id && !sent.includes(order) && order.estimate?.machineId === rows.machineId);
+  const onMachine = rows.orders.filter((order) => order.assignedOperatorId && order.assignedOperatorId !== user.id && !sent.includes(order) && order.estimate?.machineId === rows.machineId);
   return (
     <OrdersShell title={t("operator.ordersTitle")} today={todayLabel()} person={{ name: personName(user) || t("users.role.OPERATOR"), role: t("users.role.OPERATOR") }} showCommands={false} backHref="/dashboard/operator" backLabel={t("operator.back")}>
       {rows.orders.length === 0 ? <p className="text-slate-400">{t("operator.empty")}</p> : null}
       <OrderGroup title={t("operator.mine")} orders={mine} />
+      <OrderGroup title={t("operator.open")} orders={open} />
       <OrderGroup title={t("operator.sent")} orders={sent} />
       <OrderGroup title={t("operator.onMachine")} orders={onMachine} />
     </OrdersShell>

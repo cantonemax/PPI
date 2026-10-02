@@ -1,9 +1,7 @@
 const pausedPrefixes = [
   "/dashboard/copilot",
-  "/dashboard/process",
   "/dashboard/materials",
   "/dashboard/tools",
-  "/dashboard/machines",
   "/dashboard/users",
   "/dashboard/settings",
   "/dashboard/quality/certifications",

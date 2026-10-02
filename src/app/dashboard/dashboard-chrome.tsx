@@ -47,13 +47,17 @@ export function DashboardChrome({
 
   if (floorScreen) {
     return (
-      <div data-appearance={appearance} className="flex h-dvh flex-col bg-stone-300 text-stone-950" style={{ ["--ppi-slogan" as string]: "#1e40af" }}>
+      <div data-appearance={appearance} className="ppi-screen bg-stone-300 text-stone-950" style={{ ["--ppi-slogan" as string]: "#1e40af" }}>
         <header className="grid h-16 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-stone-500 bg-stone-300 px-4">
           <div className="flex min-w-0 items-center gap-3">
             <div className="min-w-0">{brand}</div>
             <div id="ppi-siren-slot" className="flex min-w-0 flex-1 items-center justify-center" />
           </div>
-          <FloorClock />
+          <div className="flex items-center gap-3">
+            <div id="ppi-report-slot" />
+            <FloorClock />
+            <div id="ppi-reset-slot" />
+          </div>
           <div className="flex items-center justify-end gap-2">
             <p className="rounded-full border border-stone-500 bg-stone-200 px-3 py-1 text-[13px]">{today}</p>
             <Link href="/dashboard/operator/orders" className="rounded-full bg-blue-800 px-4 py-2 text-[13px] font-medium text-white">{t("operator.orders")}</Link>
@@ -62,7 +66,7 @@ export function DashboardChrome({
             </form>
           </div>
         </header>
-        <div className="min-h-0 flex-1 px-4 pb-4">{children}</div>
+        <div className="ppi-screen-body px-4 pb-4">{children}</div>
       </div>
     );
   }
