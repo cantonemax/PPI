@@ -51,6 +51,7 @@ const nav = [
   { href: "/dashboard/orders", key: "nav.orders", icon: "orders" },
   { href: "/dashboard/copilot", key: "nav.copilot", icon: "pulse" },
   { href: "/dashboard/quality", key: "nav.quality", icon: "check" },
+  { href: "/dashboard/settings", key: "nav.qualityParameters", icon: "settings" },
   { href: "/dashboard/quality/certifications", key: "nav.certifications", icon: "file" },
   { href: "/dashboard/materials", key: "nav.materials", icon: "box" },
   { href: "/dashboard/tools", key: "nav.tools", icon: "tool" },

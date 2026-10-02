@@ -3,7 +3,6 @@ const pausedPrefixes = [
   "/dashboard/materials",
   "/dashboard/tools",
   "/dashboard/users",
-  "/dashboard/settings",
   "/dashboard/quality/certifications",
 ];
 

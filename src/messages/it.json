@@ -103,6 +103,7 @@
   "company.logoInvalid": "Il logo deve essere un'immagine fino a 2 MB.",
   "nav.users": "Persone",
   "nav.quality": "Qualità",
+  "nav.qualityParameters": "Parametri qualità",
   "nav.certifications": "Certificazioni",
   "dashboard.title": "La tua azienda",
   "dashboard.empty": "L'azienda è pronta. Gli ordini di produzione arrivano nel prossimo ciclo.",
