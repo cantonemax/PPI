@@ -1,3 +1,5 @@
+import { evaluateSpc } from "@/lib/ppi-spc-engine";
+
 export type Confidence = "low" | "medium" | "good" | "high";
 
 export type Capability =
@@ -5,18 +7,9 @@ export type Capability =
   | { status: "notCalculable" };
 
 export function capability(values: number[], lower: number, upper: number): Capability | null {
-  if (values.length < 5) return null;
-  if (!Number.isFinite(lower) || !Number.isFinite(upper) || !(upper > lower)) return null;
-  const count = values.length;
-  const mean = values.reduce((sum, value) => sum + value, 0) / count;
-  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (count - 1);
-  const sigma = Math.sqrt(variance);
-  if (sigma === 0) return { status: "notCalculable" };
+  const spc = evaluateSpc({ measurements: values, toleranceMin: lower, toleranceMax: upper, target: (lower + upper) / 2 });
+  if (!spc.ready || spc.cp === null || spc.cpk === null) return spc.sigma === 0 ? { status: "notCalculable" } : null;
+  const count = spc.sampleSize;
   const confidence: Confidence = count >= 30 ? "high" : count >= 20 ? "good" : count >= 10 ? "medium" : "low";
-  return {
-    status: "indices",
-    cp: (upper - lower) / (6 * sigma),
-    cpk: Math.min((upper - mean) / (3 * sigma), (mean - lower) / (3 * sigma)),
-    confidence,
-  };
+  return { status: "indices", cp: spc.cp, cpk: spc.cpk, confidence };
 }

@@ -6,6 +6,7 @@ import { OwnerHome } from "@/app/dashboard/owner-home";
 import { personName, positionLabel, todayLabel } from "@/lib/session-identity";
 import { hasRole, requireMember } from "@/lib/access";
 import { capability } from "@/lib/capability";
+import { evaluateSpc, summarizeDepartment } from "@/lib/ppi-spc-engine";
 import { ownerOrder, type CopilotSignal } from "@/lib/copilot";
 import { companySignals } from "@/lib/copilot-query";
 import { daysRemaining, deliveryBand, deliveryProbability, type DeliveryQuality, type RiskLevel } from "@/lib/delivery-probability";
@@ -228,6 +229,7 @@ export default async function DashboardPage() {
     let scrapPieces = 0;
     let goodPieces = 0;
     const qualityCards: { partName: string; cp: string; cpk: string; confidence: string; confidenceKey: "low" | "medium" | "good" | "high"; points: number[]; lowerLimit: number; upperLimit: number; lower: boolean; qualityTarget: number | null; qualityWarning: number | null; qualityDelta: number | null }[] = [];
+    const departmentRows: { orderId: string; label: string; spc: ReturnType<typeof evaluateSpc> }[] = [];
     const orders = picture.rows.map((order) => {
       const good = order.actual?.goodQuantity ?? 0;
       const scrap = order.scraps.reduce((sum, item) => sum + item.pieceCount, 0);
@@ -240,7 +242,14 @@ export default async function DashboardPage() {
       });
       for (const control of controls) {
         const values = control.measurements.map((measurement) => Number(measurement.value));
-        const index = capability(values, Number(control.lowerLimit), Number(control.upperLimit));
+        const lower = Number(control.lowerLimit);
+        const upper = Number(control.upperLimit);
+        departmentRows.push({
+          orderId: order.id,
+          label: `${order.part.name} · ${control.name}`,
+          spc: evaluateSpc({ measurements: values, toleranceMin: lower, toleranceMax: upper, target: Number(control.nominal) }),
+        });
+        const index = capability(values, lower, upper);
         if (index?.status === "indices") {
           const resolved = resolveQualityThresholds({
             useCompanyDefaults: order.estimate?.useCompanyQualityDefaults !== false,
@@ -286,6 +295,7 @@ export default async function DashboardPage() {
       };
     });
     const qualityCard = qualityCards.reduce<(typeof qualityCards)[number] | null>((lowest, card) => lowest === null || Number(card.cpk) < Number(lowest.cpk) ? card : lowest, null);
+    const departmentSpc = summarizeDepartment(departmentRows);
     const department = await loadDepartmentGauges(session.companyId);
     return (
       <OwnerHome
@@ -296,6 +306,7 @@ export default async function DashboardPage() {
         signals={visible}
         certifications={picture.certifications.length}
         qualityPoints={qualityCard?.points ?? []}
+        departmentSpc={departmentSpc}
         mosaic={{
           orders: orders.length,
           criticalOrders: orders.filter((order) => visible.some((signal) => signal.orderId === order.id && signal.severity === "critical")).length,

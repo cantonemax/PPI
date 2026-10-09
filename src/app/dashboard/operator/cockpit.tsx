@@ -2,7 +2,6 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { GaugeLegend } from "@/app/dashboard/gauge-visual";
 import { t } from "@/lib/i18n";
 import { loadOperationalMatch } from "@/lib/ppi-configuration";
 import { MarkerBoard } from "@/app/dashboard/marker-board";
@@ -10,11 +9,9 @@ import { defaultDrawingMarkers, type DrawingMarker } from "@/lib/drawing-referen
 import { saveOrderMarkers } from "@/server/order-actions";
 import { alarmToneFlags, playAlarm, startSiren } from "@/lib/alarm-tones";
 import { type CockpitSnapshot } from "@/lib/live-gauge";
-import { evaluateProcessGauge, type ProcessDiagnosis } from "@/lib/process-gauge";
+import { evaluateSpc } from "@/lib/ppi-spc-engine";
 import { recordMeasurement as saveMeasurement, resetOrderMeasurements } from "@/server/quality-actions";
 import { createProcessMemory, recordMeasurement as storeMeasurement } from "@/lib/process-memory";
-import { readOutlook } from "@/lib/prediction";
-import { recommendAction } from "@/lib/recommended-action";
 import { canUseVoiceControl } from "@/lib/voice-policy";
 import { RoleName } from "@prisma/client";
 
@@ -82,16 +79,6 @@ function quotaTone(nominal: string, lower: string, upper: string, value: number 
   return position >= 80 ? "#00E676" : "#FF9800";
 }
 const actionButton = "rounded-lg border border-white/20 bg-transparent px-2 text-center text-white transition hover:!border-[#3CF0FF] hover:bg-white/[0.06] hover:shadow-[0_0_12px_rgba(60,240,255,0.28)]";
-
-const diagnosisKey: Record<ProcessDiagnosis, string> = {
-  PROCESS_STABLE: "operations.diagnosis.stable",
-  TREND_TOWARD_UPPER_LIMIT: "operations.diagnosis.upper",
-  TREND_TOWARD_LOWER_LIMIT: "operations.diagnosis.lower",
-  TOOL_WEAR_SUSPECTED: "operations.diagnosis.tool",
-  THERMAL_DRIFT_DETECTED: "operations.diagnosis.thermal",
-  INCREASING_VARIABILITY: "operations.diagnosis.variability",
-  PROCESS_OUT_OF_CONTROL: "operations.diagnosis.out",
-};
 
 const emptySnapshot: CockpitSnapshot = {
   orderId: "",
@@ -176,22 +163,7 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
   const gaugeMin = gaugeControl ? Number(gaugeControl.lower) : job.min;
   const gaugeMax = gaugeControl ? Number(gaugeControl.upper) : job.max;
   const gaugeTarget = gaugeControl ? Number(gaugeControl.nominal) : job.target;
-  const gauge = evaluateProcessGauge({
-    measurements,
-    toleranceMin: gaugeMin,
-    toleranceMax: gaugeMax,
-    target: gaugeTarget,
-    producedQuantity: produced,
-    toolRemainingLife: life,
-    scrapCount,
-    machineRuntime: runtime,
-    toolChangeEvents: toolEvents,
-    trendMarker: marker,
-  });
-  const tone = gauge.score >= 80 ? "#00E676" : gauge.score >= 60 ? "#FF9800" : "#FF4D4F";
-  const level = gauge.score >= 80 ? t("operations.stable") : gauge.score >= 60 ? t("operations.attention") : t("operations.critical");
-  const diagnosis = diagnosisKey[gauge.diagnosis];
-  const outlook = readOutlook({
+  const spc = evaluateSpc({
     measurements,
     toleranceMin: gaugeMin,
     toleranceMax: gaugeMax,
@@ -204,21 +176,25 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
     trendMarker: marker,
     checkInterval: 20,
   });
-  const action = recommendAction(gauge.diagnosis, gauge.score, outlook.context);
-  const prediction = outlook.prediction;
-  const superCritical = gauge.state === "CRITICAL" && (action.action === "operations.action.stop" || prediction.kind === "OUT_OF_TOLERANCE");
-  const criticalGlow = criticalScreen && gauge.state === "CRITICAL";
-  const alertStyle = gauge.state === "ATTENTION"
+  const score = spc.gauge.score ?? 0;
+  const tone = !spc.ready ? "#94a3b8" : score >= 80 ? "#00E676" : score >= 60 ? "#FF9800" : "#FF4D4F";
+  const level = !spc.ready ? t("spc.insufficient") : score >= 80 ? t("operations.stable") : score >= 60 ? t("operations.attention") : t("operations.critical");
+  const action = spc.recommendation;
+  const prediction = spc.prediction;
+  const gaugeState = spc.gauge.state === "INSUFFICIENT" ? "STABLE" : spc.gauge.state;
+  const superCritical = gaugeState === "CRITICAL" && (action?.action === "operations.action.stop" || prediction.kind === "OUT_OF_TOLERANCE");
+  const criticalGlow = criticalScreen && gaugeState === "CRITICAL";
+  const alertStyle = gaugeState === "ATTENTION"
     ? { boxShadow: "0 0 0 4px rgba(255, 152, 0, 0.8)" }
     : !criticalScreen
       ? undefined
       : superCritical
         ? { animation: "ppi-alert-pulse 2.5s ease-in-out infinite" }
-        : gauge.state === "CRITICAL"
+        : gaugeState === "CRITICAL"
           ? { boxShadow: "0 0 0 12px rgba(255, 77, 79, 0.14)" }
           : undefined;
   const tones = alarmToneFlags(alarmTone);
-  const critical = gauge.state === "CRITICAL";
+  const critical = gaugeState === "CRITICAL";
   const outside = measurements.slice(-10).some((value) => value < gaugeMin || value > gaugeMax);
   const sirenOn = alarmSound && tones.siren && !readOnly && outside && !sirenHeld;
   const [sirenSlot, setSirenSlot] = useState<HTMLElement | null>(null);
@@ -238,13 +214,6 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
     return startSiren();
   }, [sirenOn]);
   const due = nextIn <= 0;
-  const predictionStatus = t(prediction.headline).replace(" EXPECTED", "");
-  const predictionState = prediction.pieces !== undefined ? `${predictionStatus} ${t("operations.prediction.in")}` : "";
-  const predictionPrimary = prediction.pieces !== undefined
-    ? `${prediction.pieces} ${t("operations.prediction.pcs")}`
-    : prediction.detail
-      ? t(prediction.detail)
-      : predictionStatus;
   const valueReady = measured.trim() !== "";
 
   async function recordMeasurement() {
@@ -427,24 +396,22 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
             )}
           </section>
           <section className={`${card} row-span-full h-full min-h-0 !flex-row items-stretch overflow-hidden !border-2 !p-0`}>
-            <div className="flex w-[70%] flex-col items-center px-2 pt-3">
-              <p className={cardTitle}>{t("operations.prediction")}</p>
-              <p className={`${primary} mt-2.5 text-[#3CF0FF]`}>{predictionPrimary}</p>
-              {predictionState ? <p className={`${stateText} mt-2.5 text-[#3CF0FF]`}>{predictionState}</p> : null}
+            <div className="flex w-1/2 flex-col items-center justify-center px-2">
+              <p className={cardTitle}>{t("spc.cp")}</p>
+              <p className={`${primary} mt-2.5 text-[#3CF0FF]`}>{spc.ready && spc.cp !== null ? spc.cp.toFixed(2) : t("spc.insufficient")}</p>
             </div>
-            <div className="flex w-[30%] flex-col items-center border-l border-white/15 px-2 pt-3">
-              <p className={cardTitle}>{t("operations.scrap")}</p>
-              <p className={`${primary} mt-2.5 text-[#FF4D4F]`}>{job.scrap + scrapCount}</p>
+            <div className="flex w-1/2 flex-col items-center justify-center border-l border-white/15 px-2">
+              <p className={cardTitle}>{t("spc.cpk")}</p>
+              <p className={`${primary} mt-2.5 text-[#3CF0FF]`}>{spc.ready && spc.cpk !== null ? spc.cpk.toFixed(2) : t("spc.insufficient")}</p>
             </div>
           </section>
           </div>
           <section className={`${card} col-span-3 h-full min-h-0 gap-2 overflow-auto !justify-between`}>
-            <p className={cardTitle}>{t("operations.gauge")}</p>
-            <p className={`${primary} !text-[38px]`} style={{ color: tone }}>{gauge.score}</p>
+            <p className={cardTitle}>{t("spc.gauge")}</p>
+            <p className={`${primary} !text-[38px]`} style={{ color: tone }}>{spc.ready ? score : t("spc.insufficient")}</p>
             <p className={`${stateText} !text-[21px] !leading-none`} style={{ color: tone }}>{level}</p>
-            <GaugeLegend />
-            <p className={`${stateText} !text-[21px] !leading-none text-white`}>{t(diagnosis)}</p>
-            <p className={`${secondary} !text-[21px] !leading-none`}>{`${t("operations.drift")} ${gauge.drift} · ${t("operations.variability")} ${gauge.variability}`}</p>
+            <p className={`${stateText} !text-[21px] !leading-none text-white`}>{`${t("spc.trend")} ${spc.trend ? t(`spc.trend.${spc.trend}`) : t("spc.insufficient")}`}</p>
+            <p className={`${secondary} !text-[21px] !leading-none`}>{`${t("spc.risk")} ${spc.risk ? t(`spc.risk.${spc.risk}`) : t("spc.insufficient")}`}</p>
           </section>
           <section className={`${card} col-span-3 h-full min-h-0 gap-2 overflow-auto !justify-between`}>
             <p className={cardTitle}>{t("operations.activeTool")}</p>
@@ -459,8 +426,8 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
           </section>
           <section className={`${card} col-span-2 h-full min-h-0 overflow-auto`}>
             <p className={cardTitle}>{t("operations.recommended")}</p>
-            <p className={`${primary} mt-2.5`}>{t(action.action)}</p>
-            <p className={`${stateText} mt-2.5 text-white`}>{`${t("operations.confidence")} ${action.confidence}%`}</p>
+            <p className={`${primary} mt-2.5`}>{action ? t(action.action) : t("spc.insufficient")}</p>
+            {action ? <p className={`${stateText} mt-2.5 text-white`}>{`${t("operations.confidence")} ${action.confidence}%`}</p> : null}
             <div className="mt-auto flex w-full flex-col gap-2 pt-3">
               <button type="button" onClick={() => { setDrawingZoom(1); setDrawingOpen(true); }} className={`${stateText} text-[#3CF0FF]`}>{t("operations.openDrawing")}</button>
             </div>
@@ -558,7 +525,8 @@ function TrendChart({ nominal, lower, upper, values }: { nominal: string; lower:
   const min = Number(lower);
   const max = Number(upper);
   const samples = values.filter((value) => Number.isFinite(value));
-  const bounds = [min, max, target, ...samples].filter((value) => Number.isFinite(value));
+  const spc = evaluateSpc({ measurements: samples, toleranceMin: min, toleranceMax: max, target });
+  const bounds = [min, max, target, spc.ucl, spc.lcl, ...samples].filter((value): value is number => value !== null && Number.isFinite(value));
   if (bounds.length === 0) return null;
   const low = Math.min(...bounds);
   const high = Math.max(...bounds);
@@ -577,19 +545,31 @@ function TrendChart({ nominal, lower, upper, values }: { nominal: string; lower:
     { value: min, color: "#94a3b8" },
     { value: target, color: "#3CF0FF" },
   ].filter((guide) => Number.isFinite(guide.value));
+  if (spc.ready && spc.ucl !== null) guides.push({ value: spc.ucl, color: "#FF9800" });
+  if (spc.ready && spc.lcl !== null) guides.push({ value: spc.lcl, color: "#F59E0B" });
+  const ranges = spc.imr.map((point) => point.movingRange).filter((value): value is number => value !== null);
+  const rangeHigh = ranges.length > 0 ? Math.max(...ranges, spc.mrUcl ?? 0) : 0;
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="mt-3 aspect-[2/1] w-full" role="img">
-      {guides.map((guide) => (
-        <g key={`${guide.color}-${guide.value}`}>
-          <line x1={plot.left} x2={width - plot.right} y1={yOf(guide.value)} y2={yOf(guide.value)} stroke={guide.color} strokeDasharray={guide.color === "#3CF0FF" ? "4 3" : undefined} strokeWidth="1" />
-          <text x={width - plot.right + 6} y={yOf(guide.value) + 4} fill={guide.color} fontSize="11">{measureLabel(guide.value)}</text>
-        </g>
-      ))}
-      {samples.length > 1 ? <polyline fill="none" stroke="#e2e8f0" strokeWidth="1.5" points={samples.map((value, index) => `${xOf(index)},${yOf(value)}`).join(" ")} /> : null}
-      {samples.map((value, index) => (
-        <circle key={index} cx={xOf(index)} cy={yOf(value)} r="4.5" fill={quotaTone(nominal, lower, upper, value, false)} />
-      ))}
-    </svg>
+    <>
+      <svg viewBox={`0 0 ${width} ${height}`} className="mt-3 aspect-[2/1] w-full" role="img" aria-label={t("spc.imr")}>
+        {guides.map((guide) => (
+          <g key={`${guide.color}-${guide.value}`}>
+            <line x1={plot.left} x2={width - plot.right} y1={yOf(guide.value)} y2={yOf(guide.value)} stroke={guide.color} strokeDasharray={guide.color === "#94a3b8" ? undefined : "4 3"} strokeWidth="1" />
+            <text x={width - plot.right + 6} y={yOf(guide.value) + 4} fill={guide.color} fontSize="11">{guide.color === "#FF9800" ? t("spc.ucl") : guide.color === "#F59E0B" ? t("spc.lcl") : measureLabel(guide.value)}</text>
+          </g>
+        ))}
+        {samples.length > 1 ? <polyline fill="none" stroke="#e2e8f0" strokeWidth="1.5" points={samples.map((value, index) => `${xOf(index)},${yOf(value)}`).join(" ")} /> : null}
+        {samples.map((value, index) => (
+          <circle key={index} cx={xOf(index)} cy={yOf(value)} r="4.5" fill={quotaTone(nominal, lower, upper, value, false)} />
+        ))}
+      </svg>
+      {spc.ready && ranges.length > 1 && rangeHigh > 0 ? (
+        <svg viewBox={`0 0 ${width} 56`} className="mt-1 w-full" role="img" aria-label={t("spc.imr")}>
+          {spc.mrUcl !== null ? <line x1={12} x2={width - 58} y1={8 + (1 - spc.mrUcl / rangeHigh) * 36} y2={8 + (1 - spc.mrUcl / rangeHigh) * 36} stroke="#FF9800" strokeDasharray="4 3" /> : null}
+          <polyline fill="none" stroke="#e2e8f0" strokeWidth="1.5" points={ranges.map((value, index) => `${ranges.length <= 1 ? width / 2 : 12 + (index / (ranges.length - 1)) * (width - 70)},${8 + (1 - value / rangeHigh) * 36}`).join(" ")} />
+        </svg>
+      ) : null}
+    </>
   );
 }
 

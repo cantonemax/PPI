@@ -2,6 +2,7 @@ import Link from "next/link";
 import { CompanyBrand } from "@/app/dashboard/company-mark";
 import { DatePill, SessionIdentity } from "@/app/dashboard/session-mark";
 import { t } from "@/lib/i18n";
+import type { DepartmentSpc } from "@/lib/ppi-spc-engine";
 import { isServicePaused } from "@/lib/service-phase";
 import type { CopilotSignal } from "@/lib/copilot";
 import { DepartmentGauge } from "@/app/dashboard/gauge-visual";
@@ -81,6 +82,7 @@ export function OwnerHome({
   qualityPoints,
   mosaic,
   department,
+  departmentSpc,
 }: {
   companyName: string;
   today: string;
@@ -90,6 +92,7 @@ export function OwnerHome({
   qualityPoints: number[];
   mosaic: Mosaic;
   department: { id: string; name: string; score: number | null }[];
+  departmentSpc: DepartmentSpc;
 }) {
   const critical = signals.filter((signal) => signal.severity === "critical");
   const warning = signals.filter((signal) => signal.severity === "warning");
@@ -101,6 +104,7 @@ export function OwnerHome({
     <OwnerFrame companyName={companyName} today={today} person={person} activeHref="/dashboard">
         <div className="grid gap-3 px-3 py-3 min-[1440px]:grid-cols-[minmax(0,1fr)_300px]">
           <div className="grid gap-3">
+            <DepartmentSpcStrip reading={departmentSpc} />
             <section className={`${shell} grid items-stretch gap-2 p-3 lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]`}>
               <div className="relative h-full min-h-[280px] overflow-hidden rounded-xl border border-white/15 bg-[#050d18] shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_18px_50px_rgba(0,0,0,0.45),0_0_42px_rgba(60,240,255,0.14)]">
                 <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_70%_0%,rgba(60,240,255,0.2),transparent_46%)]" style={{ animation: "ppi-glow 4.5s ease-in-out infinite" }} />
@@ -377,6 +381,29 @@ export function gaugeOf(scrap: string | null) {
 }
 
 const shell = "rounded-2xl border border-white/10 bg-[#0b1830]/75 shadow-[0_16px_40px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.07),0_0_24px_rgba(60,240,255,0.05)] backdrop-blur";
+
+function DepartmentSpcStrip({ reading }: { reading: DepartmentSpc }) {
+  const blank = t("spc.insufficient");
+  const figure = (value: number | null, digits: number) => value === null ? blank : value.toFixed(digits);
+  const cells = [
+    [t("spc.departmentGauge"), figure(reading.gauge, 0)],
+    [t("spc.averageCp"), figure(reading.averageCp, 2)],
+    [t("spc.averageCpk"), figure(reading.averageCpk, 2)],
+    [t("spc.criticalOrders"), reading.gauge === null && reading.criticalOrders === 0 ? blank : String(reading.criticalOrders)],
+    [t("spc.departmentTrend"), reading.trend.length === 0 ? blank : reading.trend.map((value) => Math.round(value)).join(" · ")],
+    [t("spc.topRisks"), reading.risks.length === 0 ? blank : reading.risks.map((risk) => `${risk.label} ${risk.cpk.toFixed(2)}`).join(" · ")],
+  ];
+  return (
+    <section className={`${shell} grid gap-2 p-3 sm:grid-cols-2 xl:grid-cols-3`}>
+      {cells.map(([label, value]) => (
+        <div key={label} className="rounded-xl border border-white/10 bg-[#050d18] px-3 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">{label}</p>
+          <p className="mt-2 text-2xl font-semibold leading-tight text-white">{value}</p>
+        </div>
+      ))}
+    </section>
+  );
+}
 
 export function Tile({ hint, label, value, status, tone, points, note = "", gauge = null, ring = null, gap, relative = false }: { hint: string; label: string; value: string; status: string; tone: Tone; points: number[]; note?: string; gauge?: number | null; ring?: number | { fill: number; color: string } | null; gap?: number | null; relative?: boolean }) {
   const missing = value === t("dashboard.noData");

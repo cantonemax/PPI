@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 
 const cookieName = "ppi_session";
+const platformCookieName = "ppi_platform";
 
 export type SessionPayload = {
   sub: string;
@@ -27,8 +28,8 @@ export async function signSession(payload: SessionPayload): Promise<string> {
     .sign(secret());
 }
 
-export async function readSession(): Promise<SessionPayload | null> {
-  const token = (await cookies()).get(cookieName)?.value;
+async function readCookie(name: string): Promise<SessionPayload | null> {
+  const token = (await cookies()).get(name)?.value;
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secret());
@@ -46,16 +47,39 @@ export async function readSession(): Promise<SessionPayload | null> {
   }
 }
 
+export async function readSession(): Promise<SessionPayload | null> {
+  const session = await readCookie(cookieName);
+  if (!session || session.kind === "platform") return null;
+  return session;
+}
+
+export async function readPlatformSession(): Promise<SessionPayload | null> {
+  const session = await readCookie(platformCookieName);
+  if (session?.kind === "platform") return session;
+  const legacy = await readCookie(cookieName);
+  return legacy?.kind === "platform" ? legacy : null;
+}
+
+const cookieOptions = {
+  httpOnly: true,
+  sameSite: "lax" as const,
+  secure: process.env.NODE_ENV === "production",
+  path: "/",
+  maxAge: 60 * 60 * 24 * 7,
+};
+
 export async function writeSessionCookie(token: string): Promise<void> {
-  (await cookies()).set(cookieName, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 7,
-  });
+  (await cookies()).set(cookieName, token, cookieOptions);
+}
+
+export async function writePlatformCookie(token: string): Promise<void> {
+  (await cookies()).set(platformCookieName, token, cookieOptions);
 }
 
 export async function clearSessionCookie(): Promise<void> {
   (await cookies()).delete(cookieName);
+}
+
+export async function clearPlatformCookie(): Promise<void> {
+  (await cookies()).delete(platformCookieName);
 }

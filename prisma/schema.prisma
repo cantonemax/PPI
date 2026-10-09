@@ -2,8 +2,10 @@
 // Tenant boundary: companyId on every company-owned row.
 // Row Level Security is required on the application database role.
 // This file does not apply policies and is not a migration.
-// Calculated and derived values are absent: comparison, margins,
-// operational cost totals, Cp, Cpk, Copilot signals, learning memory.
+// Calculated comparison, margins, operational cost totals, Copilot signals,
+// and learning memory stay derived. The latest SPC result for one feature
+// is stored on FeatureSpc and replaced when a measurement is saved.
+// Measurement rows stay raw.
 // Economic amounts on an order are snapshots. Master rates may change
 // later and must not be read back into a started or completed order.
 // Cp and Cpk are calculated from 5 valid measurements upward.
@@ -137,6 +139,7 @@ model Company {
   controlPlans           ControlPlan[]
   controls               Control[]
   measurements           Measurement[]
+  featureSpc             FeatureSpc[]
   drawings               Drawing[]
   technicalDocuments     TechnicalDocument[]
   productionNotes        ProductionNote[]
@@ -344,6 +347,7 @@ model Machine {
   estimates      Estimate[]
   machineTimes   MachineTime[]
   downtimes      Downtime[]
+  featureSpc     FeatureSpc[]
 
   @@index([companyId, hiddenAt])
   @@index([companyId, retiredAt])
@@ -367,6 +371,7 @@ model Tool {
   estimateUses   EstimateToolUse[]
   toolChanges    ToolChange[]
   articleTools   ArticleTool[]
+  featureSpc     FeatureSpc[]
 
   @@index([companyId, hiddenAt])
   @@index([companyId, retiredAt])
@@ -436,6 +441,7 @@ model ProductionOrder {
   productionNotes      ProductionNote[]
   certifications       Certification[]
   measurements         Measurement[]
+  featureSpc           FeatureSpc[]
 
   @@unique([companyId, code])
   @@index([companyId, phase])
@@ -653,13 +659,13 @@ model Control {
   company     Company      @relation(fields: [companyId], references: [id])
   controlPlan ControlPlan  @relation(fields: [controlPlanId], references: [id])
   measurements Measurement[]
+  featureSpc   FeatureSpc?
 
   @@index([companyId])
   @@index([controlPlanId])
 }
 
-/// A value against one control. Cp and Cpk are not stored.
-/// They are calculated from 5 valid measurements: 5-9 low, 10-19 medium, 20-29 good, 30 or more high.
+/// A raw value against one control. Statistics are not stored on this row.
 model Measurement {
   id                String   @id @default(cuid())
   companyId         String
@@ -675,6 +681,46 @@ model Measurement {
   @@index([companyId])
   @@index([productionOrderId, recordedAt])
   @@index([controlId])
+}
+
+/// Latest SPC result for one controlled feature. Replaced when a measurement is saved.
+/// Control limits (ucl, lcl) are statistical. Specification limits stay on Control.
+model FeatureSpc {
+  id                     String   @id @default(cuid())
+  companyId              String
+  productionOrderId      String
+  controlId              String   @unique
+  machineId              String?
+  toolId                 String?
+  insufficientData       Boolean
+  sampleSize             Int
+  mean                   Decimal? @db.Decimal(24, 10)
+  median                 Decimal? @db.Decimal(24, 10)
+  variance               Decimal? @db.Decimal(24, 10)
+  sigma                  Decimal? @db.Decimal(24, 10)
+  minimum                Decimal? @db.Decimal(24, 10)
+  maximum                Decimal? @db.Decimal(24, 10)
+  range                  Decimal? @db.Decimal(24, 10)
+  coefficientOfVariation Decimal? @db.Decimal(24, 10)
+  cp                     Decimal? @db.Decimal(24, 10)
+  cpk                    Decimal? @db.Decimal(24, 10)
+  ucl                    Decimal? @db.Decimal(24, 10)
+  lcl                    Decimal? @db.Decimal(24, 10)
+  trendSlope             Decimal? @db.Decimal(24, 10)
+  trendDirection         String?
+  processState           String?
+  calculatedAt           DateTime
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  control         Control         @relation(fields: [controlId], references: [id])
+  machine         Machine?        @relation(fields: [machineId], references: [id])
+  tool            Tool?           @relation(fields: [toolId], references: [id])
+
+  @@index([companyId])
+  @@index([productionOrderId])
+  @@index([machineId])
+  @@index([toolId])
 }
 
 model Drawing {

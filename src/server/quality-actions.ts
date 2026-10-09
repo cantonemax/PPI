@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { recordAudit } from "@/lib/audit";
 import { hasRole, requireMember } from "@/lib/access";
 import { withTenant } from "@/lib/prisma";
+import { writeFeatureSpc } from "@/lib/spc-engine";
 
 async function requireQuality() {
   const member = await requireMember();
@@ -130,7 +131,18 @@ export async function recordMeasurement(_state: string | null, formData: FormDat
   const failed = await withTenant(member.session.companyId, async (tx) => {
     const control = await tx.control.findFirst({
       where: { id: controlId, companyId: member.session.companyId },
-      include: { controlPlan: { include: { productionOrder: true } } },
+      include: {
+        controlPlan: {
+          include: {
+            productionOrder: {
+              include: {
+                estimate: { include: { toolUses: { take: 1 } } },
+                toolChanges: { orderBy: { occurredAt: "desc" }, take: 1 },
+              },
+            },
+          },
+        },
+      },
     });
     const order = control?.controlPlan.productionOrder;
     if (!order || order.companyId !== member.session.companyId || order.phase !== OrderPhase.IN_PRODUCTION) return true;
@@ -163,6 +175,22 @@ export async function recordMeasurement(_state: string | null, formData: FormDat
       subjectType: AuditSubjectType.PRODUCTION_ORDER,
       subjectId: created.id,
     });
+    const history = await tx.measurement.findMany({
+      where: { companyId: member.session.companyId, controlId: control.id },
+      orderBy: { recordedAt: "asc" },
+      select: { value: true },
+    });
+    await writeFeatureSpc(tx, {
+      companyId: member.session.companyId,
+      productionOrderId: order.id,
+      controlId: control.id,
+      orderId: order.id,
+      feature: control.name,
+      machineId: order.estimate?.machineId ?? undefined,
+      toolId: order.toolChanges[0]?.toolId ?? order.estimate?.toolUses[0]?.toolId,
+      tolerances: { lsl: Number(control.lowerLimit), usl: Number(control.upperLimit) },
+      measurements: history.map((measurement) => Number(measurement.value)),
+    });
     return false;
   });
   if (failed) return "quality.notInProduction";
@@ -186,6 +214,7 @@ export async function resetOrderMeasurements(orderId: string): Promise<string | 
       if (!user || !onThisOrder) return true;
     }
     await tx.measurement.deleteMany({ where: { companyId: member.session.companyId, productionOrderId: order.id } });
+    await tx.featureSpc.deleteMany({ where: { companyId: member.session.companyId, productionOrderId: order.id } });
     return false;
   });
   if (failed) return "quality.notInProduction";

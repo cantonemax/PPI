@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { readObject } from "@/lib/object-storage";
 import { prisma } from "@/lib/prisma";
-import { readSession } from "@/lib/session";
+import { readPlatformSession } from "@/lib/session";
 
 function mediaType(key: string) {
   const lower = key.toLowerCase();
@@ -12,7 +12,7 @@ function mediaType(key: string) {
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ companyId: string }> }) {
-  const session = await readSession();
+  const session = await readPlatformSession();
   if (!session || session.kind !== "platform") return NextResponse.redirect(new URL("/platform/login", request.url));
   const { companyId } = await params;
   const company = await prisma.company.findUnique({ where: { id: companyId }, select: { logoKey: true } });

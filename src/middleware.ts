@@ -7,16 +7,20 @@ const protectedPaths = ["/dashboard", "/users"];
 
 export async function middleware(request: NextRequest) {
   if (request.nextUrl.pathname.startsWith("/platform") && request.nextUrl.pathname !== "/platform/login") {
-    const token = request.cookies.get("ppi_session")?.value;
+    const platformToken = request.cookies.get("ppi_platform")?.value ?? request.cookies.get("ppi_session")?.value;
     const secret = process.env.AUTH_SECRET;
-    if (!token || !secret) return NextResponse.redirect(new URL("/platform/login", request.url));
+    if (!platformToken || !secret) return NextResponse.redirect(new URL("/platform/login", request.url));
     try {
-      const { payload } = await jwtVerify(token, new TextEncoder().encode(secret));
+      const { payload } = await jwtVerify(platformToken, new TextEncoder().encode(secret));
       if (payload.kind !== "platform") return NextResponse.redirect(new URL("/platform/login", request.url));
+      const response = NextResponse.next();
+      if (!request.cookies.get("ppi_platform")?.value) {
+        response.cookies.set("ppi_platform", platformToken, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: 60 * 60 * 24 * 7 });
+      }
+      return response;
     } catch {
       return NextResponse.redirect(new URL("/platform/login", request.url));
     }
-    return NextResponse.next();
   }
 
   const isProtected = protectedPaths.some((path) => request.nextUrl.pathname.startsWith(path));
@@ -28,8 +32,13 @@ export async function middleware(request: NextRequest) {
 
   try {
     const { payload } = await jwtVerify(token, new TextEncoder().encode(secret));
-    if (!payload.sub || typeof payload.companyId !== "string") {
-      return NextResponse.redirect(new URL("/login", request.url));
+    if (!payload.sub || payload.kind === "platform" || typeof payload.companyId !== "string" || payload.companyId === "") {
+      const response = NextResponse.redirect(new URL("/login", request.url));
+      if (payload.kind === "platform" && !request.cookies.get("ppi_platform")?.value) {
+        response.cookies.set("ppi_platform", token, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: 60 * 60 * 24 * 7 });
+      }
+      if (payload.kind === "platform") response.cookies.delete("ppi_session");
+      return response;
     }
   } catch {
     return NextResponse.redirect(new URL("/login", request.url));

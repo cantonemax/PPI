@@ -6,10 +6,10 @@ import { recordAudit } from "@/lib/audit";
 import { objectKey, writeObject } from "@/lib/object-storage";
 import { hashPassword } from "@/lib/password";
 import { prisma, withTenant } from "@/lib/prisma";
-import { clearSessionCookie, readSession, signSession, writeSessionCookie } from "@/lib/session";
+import { clearPlatformCookie, readPlatformSession, signSession, writePlatformCookie } from "@/lib/session";
 
 async function requirePlatform() {
-  const session = await readSession();
+  const session = await readPlatformSession();
   if (!session || session.kind !== "platform") redirect("/platform/login");
   return session;
 }
@@ -20,12 +20,12 @@ export async function signInPlatform(_state: string | null, formData: FormData):
   const expectedEmail = process.env.PLATFORM_ADMIN_EMAIL?.trim().toLowerCase();
   const expectedPassword = process.env.PLATFORM_ADMIN_PASSWORD ?? "";
   if (!expectedEmail || !expectedPassword || email !== expectedEmail || password !== expectedPassword) return "auth.invalidCredentials";
-  await writeSessionCookie(await signSession({ sub: "platform-admin", companyId: "", email, kind: "platform" }));
+  await writePlatformCookie(await signSession({ sub: "platform-admin", companyId: "", email, kind: "platform" }));
   redirect("/platform");
 }
 
 export async function signOutPlatform(): Promise<void> {
-  await clearSessionCookie();
+  await clearPlatformCookie();
   redirect("/platform/login");
 }
 

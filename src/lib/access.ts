@@ -5,8 +5,7 @@ import { readSession } from "@/lib/session";
 
 export async function requireMember() {
   const session = await readSession();
-  if (!session) redirect("/login");
-  if (session.kind === "platform") redirect("/platform");
+  if (!session || session.kind === "platform") redirect("/login");
 
   const user = await withTenant(session.companyId, (tx) => tx.user.findFirst({
     where: {
