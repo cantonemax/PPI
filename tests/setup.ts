@@ -9,7 +9,7 @@ const g = globalThis as typeof globalThis & {
 
 const port = 55436;
 process.env.AUTH_SECRET = "qa-secret-qa-secret-qa-secret-qa";
-process.env.APP_URL = "http://localhost:3000";
+process.env.APP_URL = "http://localhost:3002";
 process.env.NODE_ENV = "test";
 
 const databaseDir =
