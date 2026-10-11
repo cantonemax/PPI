@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import "./next-mocks";
 
 const g = globalThis as typeof globalThis & {
@@ -12,13 +14,10 @@ process.env.AUTH_SECRET = "qa-secret-qa-secret-qa-secret-qa";
 process.env.APP_URL = "http://localhost:3002";
 process.env.NODE_ENV = "test";
 
-const databaseDir =
-  "C:/Users/m.cantone.MRC-ZBOOK-1/AppData/Local/Temp/ppi-qa/sprint7c";
+const databaseDir = path.join(os.tmpdir(), "ppi-qa", "sprint7c");
 
 async function startPg() {
-  const { default: EmbeddedPostgres } = await import(
-    "file:///C:/Users/m.cantone.MRC-ZBOOK-1/AppData/Local/Temp/ppi-qa/node_modules/embedded-postgres/dist/index.js"
-  );
+  const { default: EmbeddedPostgres } = await import("embedded-postgres");
   if (fs.existsSync(databaseDir)) {
     fs.rmSync(databaseDir, { recursive: true, force: true });
   }
@@ -28,6 +27,7 @@ async function startPg() {
     password: "postgres",
     port,
     persistent: false,
+    onLog: () => undefined,
   });
   await pg.initialise();
   await pg.start();

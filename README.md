@@ -3,10 +3,10 @@ Predictive Process Intelligence - The Intelligence Behind Manufacturing.
 
 ## Porta locale dedicata: 3002
 
-| Applicazione | Porta |
+| Applicazione | URL locale |
 | --- | --- |
-| ScuderiApp | 3005 |
-| DomusApp | 3001 |
-| PPI | 3002 |
-| Vision Planner | 3003 |
-| CassaFisco | 3004 |
+| ScuderiApp | http://localhost:3005 |
+| DomusApp | http://localhost:3001 |
+| PPI | http://localhost:3002 |
+| Vision Planner | http://localhost:3003 |
+| CassaFisco | http://localhost:3004 |
