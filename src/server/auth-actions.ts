@@ -132,7 +132,7 @@ export async function requestPasswordReset(_state: string | null, formData: Form
       },
     });
     if (process.env.NODE_ENV !== "production") {
-      return `${process.env.APP_URL ?? "http://localhost:3000"}/reset-password?token=${token}`;
+      return `${process.env.APP_URL ?? "http://localhost:3002"}/reset-password?token=${token}`;
     }
   }
   return "auth.forgotSent";

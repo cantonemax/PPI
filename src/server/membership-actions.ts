@@ -72,7 +72,7 @@ export async function inviteUser(_state: string | null, formData: FormData): Pro
   }
 
   revalidatePath("/dashboard/users");
-  return `${process.env.APP_URL ?? "http://localhost:3000"}/invite/${token}`;
+  return `${process.env.APP_URL ?? "http://localhost:3002"}/invite/${token}`;
 }
 
 export async function revokeInvitation(formData: FormData): Promise<void> {
