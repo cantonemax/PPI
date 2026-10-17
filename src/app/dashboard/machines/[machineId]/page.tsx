@@ -1,15 +1,15 @@
 import { notFound, redirect } from "next/navigation";
-import { RoleName } from "@prisma/client";
 import { ResourceForm } from "@/app/dashboard/machines/resource-form";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
 import { hideMachine, retireMachine, updateMachine } from "@/server/resource-actions";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export default async function MachinePage({ params }: { params: Promise<{ machineId: string }> }) {
   const { machineId } = await params;
   const { session, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER) && !hasRole(activeRoles, RoleName.PRODUCTION_MANAGER)) redirect("/dashboard");
+  if (!RoleEngine.canPlan(activeRoles)) redirect("/dashboard");
   const machine = await withTenant(session.companyId, async (tx) => {
     const found = await tx.machine.findFirst({ where: { id: machineId, companyId: session.companyId, hiddenAt: null } });
     if (!found) return null;

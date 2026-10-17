@@ -1,5 +1,7 @@
 import { OrderPhase, TimeUnit } from "@prisma/client";
 import { capability } from "@/lib/capability";
+import { formatCapability, formatCurrency, formatPercent } from "@/lib/kpi/kpi-formatting";
+import { SPCEngine } from "@/lib/spc/spc-engine";
 
 export type Severity = "critical" | "warning" | "info";
 export type SignalKind = "quality" | "tooling" | "production" | "margin" | "recommendation" | "trend";
@@ -126,19 +128,19 @@ export function copilotSignals(orders: CopilotOrder[], timeUnit: TimeUnit, now =
     const history = memory.filter((item) => item.partId === order.partId);
     for (const control of order.controls) {
       const latest = control.values.at(-1);
-      if (latest !== undefined && (latest < control.lower || latest > control.upper)) {
+      if (SPCEngine.outOfTolerance(latest, control.lower, control.upper)) {
         signals.push({ kind: "quality", severity: "critical", orderId: order.id, subject: control.name, code: "outside", value: String(latest) });
       }
     }
     const rate = scrapRate(order);
     const pastRate = mean(history.map(scrapRate).filter((value): value is number => value !== null));
     if (rate !== null && pastRate !== null && rate > pastRate) {
-      signals.push({ kind: "quality", severity: "warning", orderId: order.id, subject: order.partName, code: "scrapHistory", value: rate.toFixed(2) });
+      signals.push({ kind: "quality", severity: "warning", orderId: order.id, subject: order.partName, code: "scrapHistory", value: formatPercent(rate * 100) ?? "" });
     }
     const currentCpk = cpkOf(order);
     const previous = [...history].reverse().map(cpkOf).find((value) => value !== null);
     if (currentCpk !== null && previous !== undefined && previous !== null && currentCpk < previous) {
-      signals.push({ kind: "quality", severity: "critical", orderId: order.id, subject: order.partName, code: "cpk", value: currentCpk.toFixed(2) });
+      signals.push({ kind: "quality", severity: "critical", orderId: order.id, subject: order.partName, code: "cpk", value: formatCapability(currentCpk) ?? "" });
     }
 
     for (const line of order.actualTools) {
@@ -179,9 +181,9 @@ export function copilotSignals(orders: CopilotOrder[], timeUnit: TimeUnit, now =
       const expectedMargin = order.agreed - order.estimatedCost;
       const actualMargin = order.agreed - order.actualCost;
       if (actualMargin < expectedMargin) {
-        signals.push({ kind: "margin", severity: "critical", orderId: order.id, subject: order.partName, code: "margin", value: actualMargin.toFixed(2) });
+        signals.push({ kind: "margin", severity: "critical", orderId: order.id, subject: order.partName, code: "margin", value: formatCurrency(actualMargin) ?? "" });
       } else if (order.actualCost > order.estimatedCost) {
-        signals.push({ kind: "margin", severity: "critical", orderId: order.id, subject: order.partName, code: "cost", value: order.actualCost.toFixed(2) });
+        signals.push({ kind: "margin", severity: "critical", orderId: order.id, subject: order.partName, code: "cost", value: formatCurrency(order.actualCost) ?? "" });
       }
     }
   }
@@ -191,7 +193,7 @@ export function copilotSignals(orders: CopilotOrder[], timeUnit: TimeUnit, now =
     const time = mean(history.map((item) => timePerGood(item, timeUnit, now)).filter((value): value is number => value !== null));
     const rate = mean(history.map(scrapRate).filter((value): value is number => value !== null));
     if (time !== null) signals.push({ kind: "recommendation", severity: "info", orderId: draft.id, subject: draft.partName, code: "timeSuggestion", value: time.toFixed(2) });
-    if (rate !== null) signals.push({ kind: "recommendation", severity: "info", orderId: draft.id, subject: draft.partName, code: "scrapSuggestion", value: rate.toFixed(2) });
+    if (rate !== null) signals.push({ kind: "recommendation", severity: "info", orderId: draft.id, subject: draft.partName, code: "scrapSuggestion", value: formatPercent(rate * 100) ?? "" });
     const toolIds = new Set(history.flatMap((item) => item.actualTools.map((line) => line.id)));
     for (const toolId of toolIds) {
       const ratio = mean(

@@ -1,14 +1,15 @@
 import { redirect } from "next/navigation";
-import { OrderPhase, RoleName } from "@prisma/client";
+import { OrderPhase } from "@prisma/client";
 import { OrderForm } from "@/app/dashboard/orders/order-form";
 import { OrderList } from "@/app/dashboard/orders/order-list";
 import { OrdersShell } from "@/app/dashboard/orders/orders-shell";
 import { controlsFromSnapshot } from "@/lib/order-controls";
 import { personName, positionLabel, todayLabel } from "@/lib/session-identity";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
 import { createDraftOrder } from "@/server/order-actions";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 function when(value: Date | null) {
   return value ? value.toLocaleString("it-IT", { timeZone: "Europe/Rome" }) : "—";
@@ -38,8 +39,8 @@ function phasesFor(view: OrderView): OrderPhase[] {
 
 export default async function OrdersPage({ searchParams }: { searchParams: Promise<{ view?: string; error?: string }> }) {
   const { session, user, activeRoles } = await requireMember();
-  const owner = hasRole(activeRoles, RoleName.OWNER);
-  if (!owner && !hasRole(activeRoles, RoleName.PRODUCTION_MANAGER)) redirect("/dashboard");
+  const owner = RoleEngine.isOwner(activeRoles);
+  if (!owner && !RoleEngine.isProductionManager(activeRoles)) redirect("/dashboard");
   const params = await searchParams;
   const view = readView(params.view);
   const listError = params.error === "order.activateFailed" ? t("order.activateFailed") : null;

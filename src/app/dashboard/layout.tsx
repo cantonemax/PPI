@@ -1,18 +1,17 @@
-import { RoleName } from "@prisma/client";
 import { CompanyBrand } from "@/app/dashboard/company-mark";
 import { DashboardChrome } from "@/app/dashboard/dashboard-chrome";
-import { hasRole, requireMember } from "@/lib/access";
-import { canManageQualityThresholds } from "@/lib/quality-thresholds";
+import { requireMember } from "@/lib/access";
 import { personName, positionLabel, todayLabel } from "@/lib/session-identity";
 import { promoteDueOrders } from "@/server/order-activation";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { session, user, activeRoles } = await requireMember();
   await promoteDueOrders(session.companyId);
-  const owner = hasRole(activeRoles, RoleName.OWNER);
-  const planner = owner || hasRole(activeRoles, RoleName.PRODUCTION_MANAGER);
-  const floor = owner || hasRole(activeRoles, RoleName.OPERATOR);
-  const quality = owner || hasRole(activeRoles, RoleName.QUALITY_MANAGER);
+  const owner = RoleEngine.isOwner(activeRoles);
+  const planner = RoleEngine.canPlan(activeRoles);
+  const floor = RoleEngine.canOperate(activeRoles);
+  const quality = RoleEngine.canCertify(activeRoles);
   const operatorOnly = floor && !planner && !quality;
   return (
     <DashboardChrome
@@ -24,7 +23,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       floor={floor}
       quality={quality}
       operatorOnly={operatorOnly}
-      thresholds={canManageQualityThresholds(activeRoles)}
+      thresholds={RoleEngine.hasQualityAccess(activeRoles)}
       today={todayLabel()}
       personName={personName(user)}
       personRole={positionLabel(activeRoles)}

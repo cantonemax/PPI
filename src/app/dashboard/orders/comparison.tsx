@@ -1,10 +1,10 @@
 import { t } from "@/lib/i18n";
-import { timeControlsPaused } from "@/lib/service-phase";
 import type { OrderEconomics } from "@/lib/economics";
+import { formatCurrency } from "@/lib/kpi/kpi-formatting";
+import { timeControlsPaused } from "@/lib/service-phase";
 
 function money(value: number | null) {
-  if (value === null) return t("economy.absent");
-  return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
+  return formatCurrency(value) ?? t("economy.absent");
 }
 
 function quantity(value: number | null) {

@@ -1,16 +1,18 @@
 "use server";
 
-import { AuditAction, AuditSubjectType, OrderPhase, Prisma, RoleName } from "@prisma/client";
+import { AuditAction, AuditSubjectType, OrderPhase, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { recordAudit } from "@/lib/audit";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { withTenant } from "@/lib/prisma";
+import { updateOwned } from "@/lib/tenant-write";
 import { activateDraft } from "@/server/order-activation";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 async function requireFloor() {
   const member = await requireMember();
-  const allowed = hasRole(member.activeRoles, RoleName.OPERATOR) || hasRole(member.activeRoles, RoleName.OWNER);
+  const allowed = RoleEngine.canOperate(member.activeRoles);
   if (!allowed) redirect("/dashboard");
   return member;
 }
@@ -39,10 +41,7 @@ export async function setActiveOrder(formData: FormData): Promise<void> {
       where: { id: orderId, companyId: member.session.companyId, phase: OrderPhase.IN_PRODUCTION, hiddenAt: null },
     });
     if (!order) return;
-    await tx.user.update({
-      where: { id: member.user.id },
-      data: { activeProductionOrderId: order.id },
-    });
+    await updateOwned(tx.user, member.user.id, member.session.companyId, { activeProductionOrderId: order.id });
     await recordAudit(tx, {
       companyId: member.session.companyId,
       actorUserId: member.user.id,
@@ -62,10 +61,7 @@ export async function registerGoodParts(_state: string | null, formData: FormDat
   const failed = await withTenant(member.session.companyId, async (tx) => {
     const order = await activeOrder(member.session.companyId, member.user.id, tx);
     if (!order?.actual) return true;
-    await tx.actual.update({
-      where: { id: order.actual.id },
-      data: { goodQuantity: { increment: amount } },
-    });
+    await updateOwned(tx.actual, order.actual.id, member.session.companyId, { goodQuantity: { increment: amount } });
     await recordAudit(tx, {
       companyId: member.session.companyId,
       actorUserId: member.user.id,
@@ -141,7 +137,7 @@ export async function endPause(): Promise<void> {
       where: { productionOrderId: order.id, companyId: member.session.companyId, endedAt: null },
     });
     if (!open) return;
-    await tx.pause.update({ where: { id: open.id }, data: { endedAt: new Date() } });
+    await updateOwned(tx.pause, open.id, member.session.companyId, { endedAt: new Date() });
     await recordAudit(tx, {
       companyId: member.session.companyId,
       actorUserId: member.user.id,
@@ -195,7 +191,7 @@ export async function endDowntime(): Promise<void> {
       where: { productionOrderId: order.id, companyId: member.session.companyId, endedAt: null },
     });
     if (!open) return;
-    await tx.downtime.update({ where: { id: open.id }, data: { endedAt: new Date() } });
+    await updateOwned(tx.downtime, open.id, member.session.companyId, { endedAt: new Date() });
     await recordAudit(tx, {
       companyId: member.session.companyId,
       actorUserId: member.user.id,
@@ -401,12 +397,9 @@ export async function operatorCompleteOrder(formData: FormData): Promise<void> {
     const where = { productionOrderId: order.id, companyId: member.session.companyId, endedAt: null };
     const open = (await tx.pause.count({ where })) + (await tx.downtime.count({ where }));
     if (open > 0) return "order.openInterval";
-    await tx.productionOrder.update({
-      where: { id: order.id },
-      data: { phase: OrderPhase.COMPLETED, completedAt: new Date() },
-    });
+    await updateOwned(tx.productionOrder, order.id, member.session.companyId, { phase: OrderPhase.COMPLETED, completedAt: new Date() });
     if (member.user.activeProductionOrderId === order.id) {
-      await tx.user.update({ where: { id: member.user.id }, data: { activeProductionOrderId: null } });
+      await updateOwned(tx.user, member.user.id, member.session.companyId, { activeProductionOrderId: null });
     }
     await recordAudit(tx, {
       companyId: member.session.companyId,
@@ -434,7 +427,7 @@ export async function operatorStartOrder(formData: FormData): Promise<void> {
     if (order.assignedOperatorId && order.assignedOperatorId !== member.user.id) return "common.required";
     const failed = await activateDraft(tx, member.session.companyId, order.id, member.user.id, false);
     if (failed) return failed;
-    await tx.user.update({ where: { id: member.user.id }, data: { activeProductionOrderId: order.id } });
+    await updateOwned(tx.user, member.user.id, member.session.companyId, { activeProductionOrderId: order.id });
     return null;
   });
   revalidatePath("/dashboard/operator");

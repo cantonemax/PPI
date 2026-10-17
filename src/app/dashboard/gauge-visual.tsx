@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { t } from "@/lib/i18n";
+import { formatDepartmentScore } from "@/lib/kpi/kpi-formatting";
 
 export type GaugeTone = "stable" | "attention" | "critical";
 
@@ -42,7 +43,7 @@ export function DepartmentGauge({ machines }: { machines: { id: string; name: st
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-[12px] uppercase tracking-[0.16em] text-slate-400">{t("gauge.department")}</p>
-          <p className="mt-2 text-[40px] font-semibold leading-none" style={{ color }}>{score ?? t("dashboard.noData")}</p>
+          <p className="mt-2 text-[40px] font-semibold leading-none" style={{ color }}>{formatDepartmentScore(score) ?? t("dashboard.noData")}</p>
           <p className="mt-2 text-[13px] font-semibold uppercase tracking-[0.14em]" style={{ color }}>{tone ? t(`gauge.legend.${tone}`) : t("dashboard.kpi.empty")}</p>
         </div>
         <GaugeLegend />

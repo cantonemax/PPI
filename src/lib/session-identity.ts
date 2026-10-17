@@ -1,15 +1,13 @@
-import { RoleName } from "@prisma/client";
+import type { RoleName } from "@prisma/client";
+import { RoleEngine } from "@/lib/auth/role-engine";
 import { t } from "@/lib/i18n";
-
-const rank = [RoleName.OWNER, RoleName.PRODUCTION_MANAGER, RoleName.QUALITY_MANAGER, RoleName.OPERATOR];
 
 export function personName(user: { firstName: string | null; lastName: string | null }) {
   return [user.firstName, user.lastName].filter((part) => part && part.trim()).join(" ");
 }
 
 export function positionLabel(roles: { role: RoleName }[]) {
-  const role = rank.find((item) => roles.some((entry) => entry.role === item)) ?? RoleName.OPERATOR;
-  return t(`users.role.${role}`);
+  return t(`users.role.${RoleEngine.getRole(roles)}`);
 }
 
 export function todayLabel(now = new Date()) {

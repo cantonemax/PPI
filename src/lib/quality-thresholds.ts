@@ -1,4 +1,5 @@
 import type { RoleName } from "@prisma/client";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export const companyQualityDefaults = {
   target: 90,
@@ -36,10 +37,5 @@ export function resolveQualityThresholds(input: {
 
 /** Manage Quality Thresholds. Operators stay denied unless explicitly authorized. */
 export function canManageQualityThresholds(roles: { role: RoleName; qualityThresholdAuthority?: boolean }[]) {
-  return roles.some((item) =>
-    item.role === "OWNER"
-    || item.role === "PRODUCTION_MANAGER"
-    || item.role === "QUALITY_MANAGER"
-    || item.qualityThresholdAuthority === true,
-  );
+  return RoleEngine.hasQualityAccess(roles);
 }

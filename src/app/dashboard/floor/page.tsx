@@ -1,15 +1,15 @@
 import Link from "next/link";
-import { RoleName } from "@prisma/client";
 import { redirect } from "next/navigation";
 import { OwnerFrame } from "@/app/dashboard/owner-home";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { t } from "@/lib/i18n";
 import { loadFloorStations } from "@/lib/live-gauge";
 import { personName, positionLabel, todayLabel } from "@/lib/session-identity";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export default async function FloorDeskPage() {
   const { session, user, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER)) redirect("/dashboard");
+  if (!RoleEngine.isOwner(activeRoles)) redirect("/dashboard");
   const stations = await loadFloorStations(session.companyId);
   return (
     <OwnerFrame companyName={user.company.name} today={todayLabel()} person={{ name: personName(user), role: positionLabel(activeRoles) }} activeHref="/dashboard/floor">

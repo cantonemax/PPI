@@ -1,3 +1,5 @@
+import { StatisticsEngine } from "@/lib/statistics/statistics-engine";
+
 export const SPC_MIN_SAMPLE = 5;
 
 export type TrendDirection = "up" | "down" | "stable";
@@ -62,20 +64,17 @@ export class PpiSpcEngine {
     if (sampleSize < SPC_MIN_SAMPLE) {
       return { insufficientData: true, sampleSize, ...emptyStats };
     }
-    const mean = values.reduce((sum, value) => sum + value, 0) / sampleSize;
-    const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (sampleSize - 1);
-    const sigma = Math.sqrt(variance);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const sorted = [...values].sort((left, right) => left - right);
-    const mid = Math.floor(sampleSize / 2);
-    const median = sampleSize % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-    const coefficientOfVariation = mean === 0 ? null : (sigma / mean) * 100;
+    const stats = StatisticsEngine.statistics(values);
+    const mean = stats.mean;
+    const variance = stats.variance;
+    const sigma = stats.standardDeviation;
+    const min = stats.min;
+    const max = stats.max;
+    const median = stats.median;
+    const coefficientOfVariation = stats.coefficientOfVariation;
     const capable = sigma > 0 && Number.isFinite(input.tolerances.lsl) && Number.isFinite(input.tolerances.usl);
-    const cp = capable ? (input.tolerances.usl - input.tolerances.lsl) / (6 * sigma) : null;
-    const cpk = capable
-      ? Math.min((input.tolerances.usl - mean) / (3 * sigma), (mean - input.tolerances.lsl) / (3 * sigma))
-      : null;
+    const cp = capable ? StatisticsEngine.cp(sigma, input.tolerances.lsl, input.tolerances.usl) : null;
+    const cpk = capable ? StatisticsEngine.cpk(mean, sigma, input.tolerances.lsl, input.tolerances.usl) : null;
     const ucl = mean + 3 * sigma;
     const lcl = mean - 3 * sigma;
     const trendSlope = linearSlope(values);

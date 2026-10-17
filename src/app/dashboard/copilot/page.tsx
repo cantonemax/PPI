@@ -1,18 +1,21 @@
-import { OrderPhase, RoleName } from "@prisma/client";
+import { OrderPhase } from "@prisma/client";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { OwnerFrame } from "@/app/dashboard/owner-home";
 import { personName, positionLabel } from "@/lib/session-identity";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { companySignals } from "@/lib/copilot-query";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
+import { productionProgressPercent } from "@/lib/economics";
+import { formatPercent } from "@/lib/kpi/kpi-formatting";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 const card = "relative flex flex-col overflow-hidden rounded-xl border border-white/[0.05] bg-gradient-to-b from-white/[0.035] to-transparent p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:-translate-y-0.5";
 
 export default async function CopilotPage() {
   const { session, user, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER) && !hasRole(activeRoles, RoleName.PRODUCTION_MANAGER)) redirect("/dashboard");
+  if (!RoleEngine.canPlan(activeRoles)) redirect("/dashboard");
   const signals = await companySignals(session.companyId, user.company.timeUnit);
   const picture = await withTenant(session.companyId, async (tx) => {
     const [orders, running, stopped] = await Promise.all([
@@ -93,13 +96,11 @@ function StatusDot({ color, pulse }: { color: string; pulse: boolean }) {
   return <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: color, boxShadow: `0 0 8px ${color}`, animation: pulse ? "ppi-soft-pulse 2.8s ease-in-out infinite" : undefined }} />;
 }
 
-function progressOf(orders: { id: string; actual: { goodQuantity: number } | null; scraps: { pieceCount: number }[] }[], orderId: string) {
+function progressOf(orders: { id: string; targetQuantity: number; actual: { goodQuantity: number } | null }[], orderId: string) {
   const order = orders.find((item) => item.id === orderId);
   if (!order) return t("dashboard.kpi.empty");
-  const produced = (order.actual?.goodQuantity ?? 0) + order.scraps.reduce((sum, item) => sum + item.pieceCount, 0);
-  const good = order.actual?.goodQuantity ?? 0;
-  if (produced <= 0) return t("dashboard.kpi.empty");
-  return `${Math.round((good / produced) * 100)}%`;
+  const progress = productionProgressPercent(order.actual?.goodQuantity ?? 0, order.targetQuantity);
+  return formatPercent(progress) ?? t("dashboard.kpi.empty");
 }
 
 function completionOf(orders: { id: string; plannedDeliveryAt: Date | null }[], orderId: string) {

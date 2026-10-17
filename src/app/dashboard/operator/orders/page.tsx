@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { OrderPhase, RoleName } from "@prisma/client";
+import { OrderPhase } from "@prisma/client";
 import { OrdersShell } from "@/app/dashboard/orders/orders-shell";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
 import { personName, todayLabel } from "@/lib/session-identity";
 import { redirect } from "next/navigation";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 function mark(id: string) {
   return id.slice(-6).toUpperCase();
@@ -13,9 +14,9 @@ function mark(id: string) {
 
 export default async function OperatorOrdersPage() {
   const { session, user, activeRoles } = await requireMember();
-  const allowed = hasRole(activeRoles, RoleName.OPERATOR) || hasRole(activeRoles, RoleName.OWNER);
+  const allowed = RoleEngine.canOperate(activeRoles);
   if (!allowed) redirect("/dashboard");
-  const owner = hasRole(activeRoles, RoleName.OWNER);
+  const owner = RoleEngine.isOwner(activeRoles);
   const rows = await withTenant(session.companyId, async (tx) => {
     const current = await tx.user.findFirst({
       where: { id: user.id, companyId: session.companyId },

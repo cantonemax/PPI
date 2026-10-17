@@ -1,26 +1,25 @@
 "use server";
 
-import { AuditAction, AuditSubjectType, OrderPhase, Prisma, RoleName } from "@prisma/client";
+import { AuditAction, AuditSubjectType, OrderPhase, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { recordAudit } from "@/lib/audit";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { withTenant } from "@/lib/prisma";
+import { updateOwned } from "@/lib/tenant-write";
 import { writeFeatureSpc } from "@/lib/spc-engine";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 async function requireQuality() {
   const member = await requireMember();
-  const allowed = hasRole(member.activeRoles, RoleName.QUALITY_MANAGER) || hasRole(member.activeRoles, RoleName.OWNER);
+  const allowed = RoleEngine.canCertify(member.activeRoles);
   if (!allowed) redirect("/dashboard");
   return member;
 }
 
 async function requireMeasure() {
   const member = await requireMember();
-  const allowed =
-    hasRole(member.activeRoles, RoleName.OPERATOR) ||
-    hasRole(member.activeRoles, RoleName.OWNER) ||
-    hasRole(member.activeRoles, RoleName.QUALITY_MANAGER);
+  const allowed = RoleEngine.canRecordMeasurement(member.activeRoles);
   if (!allowed) redirect("/dashboard");
   return member;
 }
@@ -104,10 +103,7 @@ export async function updateControl(formData: FormData): Promise<void> {
       where: { id: controlId, companyId: member.session.companyId },
     });
     if (!control) return;
-    await tx.control.update({
-      where: { id: control.id },
-      data: { name, nominal, lowerLimit, upperLimit },
-    });
+    await updateOwned(tx.control, control.id, member.session.companyId, { name, nominal, lowerLimit, upperLimit });
     await recordAudit(tx, {
       companyId: member.session.companyId,
       actorUserId: member.user.id,
@@ -146,7 +142,7 @@ export async function recordMeasurement(_state: string | null, formData: FormDat
     });
     const order = control?.controlPlan.productionOrder;
     if (!order || order.companyId !== member.session.companyId || order.phase !== OrderPhase.IN_PRODUCTION) return true;
-    const quality = hasRole(member.activeRoles, RoleName.QUALITY_MANAGER) || hasRole(member.activeRoles, RoleName.OWNER);
+    const quality = RoleEngine.canCertify(member.activeRoles);
     if (!quality) {
       const user = await tx.user.findFirst({ where: { id: member.user.id, companyId: member.session.companyId } });
       const onThisOrder = user?.activeProductionOrderId === order.id || order.assignedOperatorId === member.user.id || order.assignedOperatorId === null;
@@ -156,7 +152,7 @@ export async function recordMeasurement(_state: string | null, formData: FormDat
           where: { companyId: member.session.companyId, activeProductionOrderId: order.id, id: { not: user.id } },
           data: { activeProductionOrderId: null },
         });
-        await tx.user.update({ where: { id: user.id }, data: { activeProductionOrderId: order.id } });
+        await updateOwned(tx.user, user.id, member.session.companyId, { activeProductionOrderId: order.id });
       }
     }
     const created = await tx.measurement.create({
@@ -207,7 +203,7 @@ export async function resetOrderMeasurements(orderId: string): Promise<string | 
       where: { id: orderId, companyId: member.session.companyId, hiddenAt: null, phase: OrderPhase.IN_PRODUCTION },
     });
     if (!order) return true;
-    const quality = hasRole(member.activeRoles, RoleName.QUALITY_MANAGER) || hasRole(member.activeRoles, RoleName.OWNER);
+    const quality = RoleEngine.canCertify(member.activeRoles);
     if (!quality) {
       const user = await tx.user.findFirst({ where: { id: member.user.id, companyId: member.session.companyId } });
       const onThisOrder = user?.activeProductionOrderId === order.id || order.assignedOperatorId === member.user.id || order.assignedOperatorId === null;

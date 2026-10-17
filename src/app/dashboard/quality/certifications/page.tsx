@@ -1,13 +1,13 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { RoleName } from "@prisma/client";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export default async function CertificationsPage() {
   const { session, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER) && !hasRole(activeRoles, RoleName.QUALITY_MANAGER)) redirect("/dashboard");
+  if (!RoleEngine.canCertify(activeRoles)) redirect("/dashboard");
   const rows = await withTenant(session.companyId, (tx) =>
     tx.certification.findMany({
       where: { companyId: session.companyId },

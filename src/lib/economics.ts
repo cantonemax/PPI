@@ -57,6 +57,31 @@ function estimatedMachineHours(input: EconomicsInput): number {
   return input.timeUnit === TimeUnit.HOUR ? total : total / 60;
 }
 
+export function productionProgressPercent(goodParts: number, targetQuantity: number): number | null {
+  if (!(targetQuantity > 0) || !Number.isFinite(goodParts)) return null;
+  return (goodParts / targetQuantity) * 100;
+}
+
+export function efficiencyPercent(actualTime: number, estimatedTime: number | null): number | null {
+  if (estimatedTime === null || !(estimatedTime > 0) || !Number.isFinite(actualTime)) return null;
+  return (actualTime / estimatedTime) * 100;
+}
+
+export function scrapPercent(scrapPieces: number, produced: number): number | null {
+  if (!(produced > 0) || !Number.isFinite(scrapPieces)) return null;
+  return (scrapPieces / produced) * 100;
+}
+
+export function companyActualMargin(orders: { actualMargin: number | null }[]): number | null {
+  const known = orders.filter((order): order is { actualMargin: number } => order.actualMargin !== null && Number.isFinite(order.actualMargin));
+  if (known.length === 0) return null;
+  return known.reduce((sum, order) => sum + order.actualMargin, 0);
+}
+
+export function companyCostDeviation(orders: { costDeviation: number }[]): number {
+  return orders.reduce((sum, order) => sum + (Number.isFinite(order.costDeviation) ? order.costDeviation : 0), 0);
+}
+
 export function orderEconomics(input: EconomicsInput): OrderEconomics {
   const machineEstimate = estimatedMachineHours(input) * (input.hourlyRateSnapshot ?? 0);
   const toolEstimate = input.estimatedTools.reduce((sum, line) => sum + line.quantity * line.unitCost, 0);

@@ -2,17 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { RoleName } from "@prisma/client";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { objectKey, writeObject } from "@/lib/object-storage";
 import { familyTemplate, isPartFamily, readSpecifications } from "@/lib/part-families";
 import { resolveLimits } from "@/lib/tolerance";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
+import { updateOwned } from "@/lib/tenant-write";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 async function requirePlanner() {
   const member = await requireMember();
-  if (!hasRole(member.activeRoles, RoleName.OWNER) && !hasRole(member.activeRoles, RoleName.PRODUCTION_MANAGER)) {
+  if (!RoleEngine.canPlan(member.activeRoles)) {
     redirect("/dashboard");
   }
   return member;
@@ -131,7 +132,7 @@ export async function updatePart(_state: string | null, formData: FormData): Pro
       where: { id: partId, companyId: member.session.companyId, hiddenAt: null },
     });
     if (!part) return;
-    await tx.part.update({ where: { id: part.id }, data: { name } });
+    await updateOwned(tx.part, part.id, member.session.companyId, { name });
   });
   revalidatePath("/dashboard/parts");
   redirect(`/dashboard/parts/${partId}`);
@@ -147,7 +148,7 @@ export async function retirePart(formData: FormData): Promise<void> {
     if (!part) return;
     const used = await tx.productionOrder.count({ where: { partId: part.id, companyId: member.session.companyId } });
     if (used === 0) return;
-    await tx.part.update({ where: { id: part.id }, data: { retiredAt: new Date() } });
+    await updateOwned(tx.part, part.id, member.session.companyId, { retiredAt: new Date() });
   });
   revalidatePath("/dashboard/parts");
   revalidatePath(`/dashboard/parts/${partId}`);
@@ -163,7 +164,7 @@ export async function hidePart(formData: FormData): Promise<void> {
     if (!part) return;
     const used = await tx.productionOrder.count({ where: { partId: part.id, companyId: member.session.companyId } });
     if (used > 0) return;
-    await tx.part.update({ where: { id: part.id }, data: { hiddenAt: new Date() } });
+    await updateOwned(tx.part, part.id, member.session.companyId, { hiddenAt: new Date() });
   });
   revalidatePath("/dashboard/parts");
   redirect("/dashboard/parts");

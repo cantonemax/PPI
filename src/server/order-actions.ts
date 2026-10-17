@@ -11,12 +11,14 @@ import { fitDeviations, isToleranceKind } from "@/lib/tolerance";
 import { qualityThresholdsValid } from "@/lib/quality-thresholds";
 import { parseRomeDateTime } from "@/lib/rome-time";
 import { activateDraft, promoteDueOrders } from "@/server/order-activation";
-import { canSeeEconomics, hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { withTenant } from "@/lib/prisma";
+import { deleteOwned, updateOwned } from "@/lib/tenant-write";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 async function requirePlanner() {
   const member = await requireMember();
-  if (!hasRole(member.activeRoles, RoleName.OWNER) && !hasRole(member.activeRoles, RoleName.PRODUCTION_MANAGER)) {
+  if (!RoleEngine.canPlan(member.activeRoles)) {
     redirect("/dashboard");
   }
   return member;
@@ -277,8 +279,8 @@ export async function assignOrderDesk(formData: FormData): Promise<void> {
       ? await tx.user.findFirst({ where: { id: operatorId, companyId: member.session.companyId, revokedAt: null, roleAssignments: { some: { role: RoleName.OPERATOR, revokedAt: null } } } })
       : null;
     if (operatorId && !operator) return;
-    await tx.productionOrder.update({ where: { id: order.id }, data: { assignedOperatorId: operator?.id ?? null } });
-    await tx.estimate.update({ where: { id: order.estimate.id }, data: { machineId: machine?.id ?? null } });
+    await tx.productionOrder.updateMany({ where: { id: order.id, companyId: member.session.companyId }, data: { assignedOperatorId: operator?.id ?? null } });
+    await updateOwned(tx.estimate, order.estimate.id, member.session.companyId, { machineId: machine?.id ?? null });
   });
   revalidatePath(`/dashboard/orders/${orderId}`);
   redirect(`/dashboard/orders/${orderId}`);
@@ -301,8 +303,8 @@ export async function saveQualityRules(formData: FormData): Promise<void> {
     const warningNumber = warningDeltaPercent === null ? null : Number(warningDeltaPercent);
     const deltaNumber = criticalDeltaPercent === null ? null : Number(criticalDeltaPercent);
     if (!useCompanyQualityDefaults && (targetNumber === null || warningNumber === null || deltaNumber === null || !qualityThresholdsValid(targetNumber, warningNumber, deltaNumber))) return true;
-    await tx.estimate.update({
-      where: { id: order.estimate.id },
+    await tx.estimate.updateMany({
+      where: { id: order.estimate.id, companyId: member.session.companyId },
       data: { useCompanyQualityDefaults, qualityTargetPercent, warningDeltaPercent, criticalDeltaPercent },
     });
     return false;
@@ -313,8 +315,8 @@ export async function saveQualityRules(formData: FormData): Promise<void> {
 
 export async function saveOrderSettings(_state: string | null, formData: FormData): Promise<string | null> {
   const member = await requireMember();
-  const planner = hasRole(member.activeRoles, RoleName.OWNER) || hasRole(member.activeRoles, RoleName.PRODUCTION_MANAGER);
-  if (!planner && !hasRole(member.activeRoles, RoleName.OPERATOR)) redirect("/dashboard");
+  const planner = RoleEngine.canPlan(member.activeRoles);
+  if (!planner && !RoleEngine.isOperator(member.activeRoles)) redirect("/dashboard");
   const orderId = String(formData.get("orderId") ?? "");
   const failed = await withTenant(member.session.companyId, async (tx) => {
     const order = await tx.productionOrder.findFirst({
@@ -348,8 +350,8 @@ export async function saveOrderSettings(_state: string | null, formData: FormDat
       : [];
     if (tools.length !== toolLines.length) return true;
     const controls = readControls(formData.get("controls"));
-    await tx.productionOrder.update({
-      where: { id: order.id },
+    await tx.productionOrder.updateMany({
+      where: { id: order.id, companyId: member.session.companyId },
       data: {
         targetQuantity,
         assignedOperatorId: operator?.id ?? null,
@@ -357,8 +359,8 @@ export async function saveOrderSettings(_state: string | null, formData: FormDat
       },
     });
     await tx.estimateToolUse.deleteMany({ where: { estimateId: order.estimate.id, companyId: member.session.companyId } });
-    await tx.estimate.update({
-      where: { id: order.estimate.id },
+    await tx.estimate.updateMany({
+      where: { id: order.estimate.id, companyId: member.session.companyId },
       data: {
         timePerPiece: formData.has("timePerPiece") ? decimalOrNull(formData.get("timePerPiece")) : order.estimate.timePerPiece,
         expectedScrap: formData.has("expectedScrap") ? decimalOrNull(formData.get("expectedScrap")) : order.estimate.expectedScrap,
@@ -367,16 +369,20 @@ export async function saveOrderSettings(_state: string | null, formData: FormDat
         criticalDeltaPercent,
         useCompanyQualityDefaults,
         machineId: machine?.id ?? null,
-        toolUses: {
-          create: toolLines.map((line) => ({
-            companyId: member.session.companyId,
-            toolId: line.id,
-            quantity: line.quantity,
-            unitCost: tools.find((tool) => tool.id === line.id)!.unitCost,
-          })),
-        },
       },
     });
+    if (toolLines.length > 0) {
+      const estimateId = order.estimate.id;
+      await tx.estimateToolUse.createMany({
+        data: toolLines.map((line) => ({
+          companyId: member.session.companyId,
+          estimateId,
+          toolId: line.id,
+          quantity: line.quantity,
+          unitCost: tools.find((tool) => tool.id === line.id)!.unitCost,
+        })),
+      });
+    }
     const plan = order.controlPlan ?? await tx.controlPlan.create({
       data: { companyId: member.session.companyId, productionOrderId: order.id },
     });
@@ -495,7 +501,7 @@ export async function saveOrderMarkers(orderId: string, markers: { reference: st
     for (const marker of markers) {
       const control = order?.controlPlan?.controls.find((row) => row.name.startsWith(`${marker.reference} `));
       if (!control) continue;
-      await tx.control.update({ where: { id: control.id }, data: { markerX: marker.x, markerY: marker.y } });
+      await updateOwned(tx.control, control.id, member.session.companyId, { markerX: marker.x, markerY: marker.y });
     }
   });
 }
@@ -511,18 +517,18 @@ export async function updateDraftOrder(_state: string | null, formData: FormData
     if (!order?.estimate) return true;
     const input = await loadDraftInput(member.session.companyId, formData, tx);
     if (!input) return true;
-    if (!canSeeEconomics(member.activeRoles)) {
+    if (!RoleEngine.hasEconomyAccess(member.activeRoles)) {
       input.otherOperationalCost = order.estimate.otherOperationalCost;
       input.agreedOperationalValue = order.estimate.agreedOperationalValue;
     }
-    await tx.productionOrder.update({
-      where: { id: order.id },
+    await tx.productionOrder.updateMany({
+      where: { id: order.id, companyId: member.session.companyId },
       data: { partId: input.partId, targetQuantity: input.targetQuantity, plannedStartAt: input.plannedStartAt, plannedDeliveryAt: input.plannedDeliveryAt },
     });
     await tx.estimateToolUse.deleteMany({ where: { estimateId: order.estimate.id, companyId: member.session.companyId } });
     await tx.estimateMaterialUse.deleteMany({ where: { estimateId: order.estimate.id, companyId: member.session.companyId } });
-    await tx.estimate.update({
-      where: { id: order.estimate.id },
+    await tx.estimate.updateMany({
+      where: { id: order.estimate.id, companyId: member.session.companyId },
       data: {
         timePerPiece: input.timePerPiece,
         expectedScrap: input.expectedScrap,
@@ -534,24 +540,31 @@ export async function updateDraftOrder(_state: string | null, formData: FormData
         hourlyRateSnapshot: null,
         otherOperationalCost: input.otherOperationalCost,
         agreedOperationalValue: input.agreedOperationalValue,
-        toolUses: {
-          create: input.toolLines.map((line) => ({
-            companyId: member.session.companyId,
-            toolId: line.id,
-            quantity: line.quantity,
-            unitCost: line.unitCost,
-          })),
-        },
-        materialUses: {
-          create: input.materialLines.map((line) => ({
-            companyId: member.session.companyId,
-            materialId: line.id,
-            quantity: line.quantity,
-            unitCost: line.unitCost,
-          })),
-        },
       },
     });
+    const estimateId = order.estimate.id;
+    if (input.toolLines.length > 0) {
+      await tx.estimateToolUse.createMany({
+        data: input.toolLines.map((line) => ({
+          companyId: member.session.companyId,
+          estimateId,
+          toolId: line.id,
+          quantity: line.quantity,
+          unitCost: line.unitCost,
+        })),
+      });
+    }
+    if (input.materialLines.length > 0) {
+      await tx.estimateMaterialUse.createMany({
+        data: input.materialLines.map((line) => ({
+          companyId: member.session.companyId,
+          estimateId,
+          materialId: line.id,
+          quantity: line.quantity,
+          unitCost: line.unitCost,
+        })),
+      });
+    }
     return false;
   });
   if (failed) return "common.required";
@@ -573,7 +586,8 @@ async function beginOrder(orderId: string, requireTime: boolean) {
       where: { companyId: member.session.companyId, activeProductionOrderId: orderId, id: { not: deskUserId } },
       data: { activeProductionOrderId: null },
     });
-    await tx.user.update({ where: { id: deskUserId }, data: { activeProductionOrderId: orderId } });
+    const pinned = await updateOwned(tx.user, deskUserId, member.session.companyId, { activeProductionOrderId: orderId });
+    if (pinned !== 1) return "order.activateFailed";
     return null;
   });
 }
@@ -593,8 +607,8 @@ export async function scheduleOrderStart(formData: FormData): Promise<void> {
         where: { id: orderId, companyId: member.session.companyId, phase: OrderPhase.DRAFT, hiddenAt: null },
       });
       if (!order) return true;
-      await tx.productionOrder.update({
-        where: { id: order.id },
+      await tx.productionOrder.updateMany({
+        where: { id: order.id, companyId: member.session.companyId },
         data: { scheduledStartAt: when, scheduledStartByUserId: member.user.id },
       });
       return false;
@@ -617,8 +631,8 @@ export async function clearScheduledStart(formData: FormData): Promise<void> {
       where: { id: orderId, companyId: member.session.companyId, phase: OrderPhase.DRAFT, hiddenAt: null },
     });
     if (!order) return;
-    await tx.productionOrder.update({
-      where: { id: order.id },
+    await tx.productionOrder.updateMany({
+      where: { id: order.id, companyId: member.session.companyId },
       data: { scheduledStartAt: null, scheduledStartByUserId: null },
     });
   });
@@ -663,10 +677,10 @@ export async function cancelStart(formData: FormData): Promise<void> {
       tx.machineTime.count({ where }),
     ]);
     if (blockers.some((count) => count > 0)) return;
-    if (order.actual) await tx.actual.delete({ where: { id: order.actual.id } });
-    await tx.estimate.update({ where: { id: order.estimate.id }, data: { hourlyRateSnapshot: null } });
-    await tx.productionOrder.update({
-      where: { id: order.id },
+    if (order.actual) await deleteOwned(tx.actual, order.actual.id, member.session.companyId);
+    await updateOwned(tx.estimate, order.estimate.id, member.session.companyId, { hourlyRateSnapshot: null });
+    await tx.productionOrder.updateMany({
+      where: { id: order.id, companyId: member.session.companyId },
       data: { phase: OrderPhase.DRAFT, startedAt: null },
     });
     await recordAudit(tx, {
@@ -692,8 +706,8 @@ export async function completeOrder(formData: FormData): Promise<void> {
     const where = { productionOrderId: order.id, companyId: member.session.companyId, endedAt: null };
     const open = (await tx.pause.count({ where })) + (await tx.downtime.count({ where }));
     if (open > 0) return "order.openInterval";
-    await tx.productionOrder.update({
-      where: { id: order.id },
+    await tx.productionOrder.updateMany({
+      where: { id: order.id, companyId: member.session.companyId },
       data: { phase: OrderPhase.COMPLETED, completedAt: new Date() },
     });
     await recordAudit(tx, {
@@ -858,8 +872,8 @@ export async function reopenOrder(formData: FormData): Promise<void> {
       where: { id: orderId, companyId: member.session.companyId, phase: OrderPhase.COMPLETED },
     });
     if (!order) return;
-    await tx.productionOrder.update({
-      where: { id: order.id },
+    await tx.productionOrder.updateMany({
+      where: { id: order.id, companyId: member.session.companyId },
       data: { phase: OrderPhase.IN_PRODUCTION, completedAt: null },
     });
     await recordAudit(tx, {
@@ -882,8 +896,8 @@ export async function cancelDraft(formData: FormData): Promise<void> {
       where: { id: orderId, companyId: member.session.companyId, phase: OrderPhase.DRAFT },
     });
     if (!order) return;
-    await tx.productionOrder.update({
-      where: { id: order.id },
+    await tx.productionOrder.updateMany({
+      where: { id: order.id, companyId: member.session.companyId },
       data: { phase: OrderPhase.CANCELLED },
     });
     await recordAudit(tx, {

@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
+import type { PlatformRole } from "@/lib/platform-access";
 
 const cookieName = "ppi_session";
 const platformCookieName = "ppi_platform";
@@ -9,6 +10,7 @@ export type SessionPayload = {
   companyId: string;
   email: string;
   kind?: "member" | "platform";
+  platformRole?: PlatformRole;
 };
 
 function secret(): Uint8Array {
@@ -36,11 +38,15 @@ async function readCookie(name: string): Promise<SessionPayload | null> {
     if (!payload.sub || typeof payload.companyId !== "string" || typeof payload.email !== "string") {
       return null;
     }
+    const kind = payload.kind === "platform" ? "platform" : "member";
+    const role = payload.platformRole === "PLATFORM_ADMIN" || payload.platformRole === "READ_ONLY" || payload.platformRole === "SUPER_ADMIN" ? payload.platformRole : undefined;
+    if (kind === "platform" && !role) return null;
     return {
       sub: payload.sub,
       companyId: payload.companyId,
       email: payload.email,
-      kind: payload.kind === "platform" ? "platform" : "member",
+      kind,
+      platformRole: kind === "platform" ? role : undefined,
     };
   } catch {
     return null;

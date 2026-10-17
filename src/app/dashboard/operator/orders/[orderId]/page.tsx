@@ -1,21 +1,22 @@
 import { notFound, redirect } from "next/navigation";
-import { OrderPhase, Prisma, RoleName } from "@prisma/client";
+import { OrderPhase, Prisma } from "@prisma/client";
 import { OperatorDrawing } from "@/app/dashboard/operator/orders/order-drawing";
 import { OrdersShell } from "@/app/dashboard/orders/orders-shell";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { drawingReferences, type DrawingMarker } from "@/lib/drawing-references";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
 import { personName, todayLabel } from "@/lib/session-identity";
 import { operatorCompleteOrder, operatorStartOrder, setActiveOrder } from "@/server/floor-actions";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export default async function OperatorOrderPage({ params, searchParams }: { params: Promise<{ orderId: string }>; searchParams: Promise<{ error?: string }> }) {
   const { orderId } = await params;
   const { error } = await searchParams;
   const { session, user, activeRoles } = await requireMember();
-  const allowed = hasRole(activeRoles, RoleName.OPERATOR) || hasRole(activeRoles, RoleName.OWNER);
+  const allowed = RoleEngine.canOperate(activeRoles);
   if (!allowed) redirect("/dashboard");
-  const owner = hasRole(activeRoles, RoleName.OWNER);
+  const owner = RoleEngine.isOwner(activeRoles);
   const order = await withTenant(session.companyId, async (tx) => {
     const current = await tx.user.findFirst({
       where: { id: user.id, companyId: session.companyId },

@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { Db } from "@/lib/prisma";
+import { updateOwned } from "@/lib/tenant-write";
 import { PpiSpcEngine, type SpcInput, type SpcResult } from "@/lib/spc-engine/ppi-spc-engine";
 
 export async function writeFeatureSpc(tx: Db, input: SpcInput & {
@@ -32,11 +33,9 @@ export async function writeFeatureSpc(tx: Db, input: SpcInput & {
     processState: result.processState,
     calculatedAt: new Date(),
   };
-  await tx.featureSpc.upsert({
-    where: { controlId: input.controlId },
-    create: { ...data, controlId: input.controlId },
-    update: data,
-  });
+  const existing = await tx.featureSpc.findFirst({ where: { controlId: input.controlId, companyId: input.companyId } });
+  if (existing) await updateOwned(tx.featureSpc, existing.id, input.companyId, data);
+  else await tx.featureSpc.create({ data: { ...data, controlId: input.controlId } });
   return result;
 }
 

@@ -8,7 +8,8 @@
  * Client-safe: do not import @/lib/access (that module pulls next/headers via session).
  */
 import { RoleName } from "@prisma/client";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export function canUseVoiceControl(roles: { role: RoleName }[]): boolean {
-  return roles.some((item) => item.role === RoleName.OWNER);
+  return RoleEngine.isOwner(roles);
 }

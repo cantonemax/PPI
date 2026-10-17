@@ -4,10 +4,12 @@ import { AuditAction, AuditSubjectType, RoleName } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { recordAudit } from "@/lib/audit";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { createToken, hashPassword, hashToken } from "@/lib/password";
 import { prisma, withTenant } from "@/lib/prisma";
+import { updateOwned } from "@/lib/tenant-write";
 import { signSession, writeSessionCookie } from "@/lib/session";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 const roles = Object.values(RoleName);
 const inviteDays = 7;
@@ -18,7 +20,7 @@ function selectedRoles(formData: FormData): RoleName[] {
 
 async function requireOwner() {
   const member = await requireMember();
-  if (!hasRole(member.activeRoles, RoleName.OWNER)) redirect("/dashboard");
+  if (!RoleEngine.isOwner(member.activeRoles)) redirect("/dashboard");
   return member;
 }
 
@@ -83,7 +85,7 @@ export async function revokeInvitation(formData: FormData): Promise<void> {
       where: { id: invitationId, companyId: member.session.companyId, acceptedAt: null, revokedAt: null },
     });
     if (!invitation) return;
-    await tx.invitation.update({ where: { id: invitation.id }, data: { revokedAt: new Date() } });
+    await updateOwned(tx.invitation, invitation.id, member.session.companyId, { revokedAt: new Date() });
     await recordAudit(tx, {
       companyId: member.session.companyId,
       actorUserId: member.user.id,
@@ -102,10 +104,13 @@ export async function acceptInvitation(_state: string | null, formData: FormData
   const tokenHash = hashToken(token);
   const invitation = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.invite_token', ${tokenHash}, true)`;
-    return tx.invitation.findUnique({
-      where: { tokenHash },
-      include: { roles: true },
+    const found = await tx.invitation.findUnique({ where: { tokenHash } });
+    if (!found) return null;
+    await tx.$executeRaw`SELECT set_config('app.company_id', ${found.companyId}, true)`;
+    const roles = await tx.invitationRole.findMany({
+      where: { invitationId: found.id, companyId: found.companyId },
     });
+    return { ...found, roles };
   });
   if (!invitation || invitation.acceptedAt || invitation.revokedAt || invitation.expiresAt < new Date()) {
     return "invite.invalid";
@@ -130,7 +135,7 @@ export async function acceptInvitation(_state: string | null, formData: FormData
         assignedAt: new Date(),
       })),
     });
-    await tx.invitation.update({ where: { id: invitation.id }, data: { acceptedAt: new Date() } });
+    await updateOwned(tx.invitation, invitation.id, invitation.companyId, { acceptedAt: new Date() });
     await recordAudit(tx, {
       companyId: invitation.companyId,
       actorUserId: created.id,
@@ -197,7 +202,7 @@ export async function revokeRole(formData: FormData): Promise<void> {
       });
       if (owners <= 1) return;
     }
-    await tx.roleAssignment.update({ where: { id: assignment.id }, data: { revokedAt: new Date() } });
+    await updateOwned(tx.roleAssignment, assignment.id, member.session.companyId, { revokedAt: new Date() });
     await recordAudit(tx, {
       companyId: member.session.companyId,
       actorUserId: member.user.id,
@@ -226,7 +231,7 @@ export async function revokeUser(formData: FormData): Promise<void> {
       });
       if (owners <= 1) return;
     }
-    await tx.user.update({ where: { id: target.id }, data: { revokedAt: new Date() } });
+    await updateOwned(tx.user, target.id, member.session.companyId, { revokedAt: new Date() });
     await tx.roleAssignment.updateMany({
       where: { userId: target.id, companyId: member.session.companyId, revokedAt: null },
       data: { revokedAt: new Date() },

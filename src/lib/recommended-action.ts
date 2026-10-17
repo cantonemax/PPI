@@ -27,6 +27,52 @@ const fallback: Record<ProcessDiagnosis, string> = {
   PROCESS_OUT_OF_CONTROL: "operations.reason.tolerance",
 };
 
+export type OperatorDecision = {
+  partKey: "operations.part.in" | "operations.part.out" | "spc.insufficient";
+  partColor: string;
+  processKey: "operations.process.stable" | "operations.process.warning" | "operations.process.unstable" | "spc.insufficient";
+  processColor: string;
+  toolKey: "operations.tool.ok" | "operations.tool.check" | "operations.tool.replace";
+  toolColor: string;
+  actionKey: "operations.decision.verify" | "operations.decision.measure" | "operations.decision.replace" | "operations.decision.quality" | "operations.action.continue";
+};
+
+const decisionColor = { good: "#00E676", warn: "#FF9800", bad: "#FF4D4F", muted: "#94a3b8" };
+
+export function toolLifeBand(toolLife: number): "replace" | "check" | "ok" {
+  if (toolLife <= 20) return "replace";
+  if (toolLife <= 40) return "check";
+  return "ok";
+}
+
+export function operatorDecision(input: {
+  hasMeasurement: boolean;
+  partOut: boolean;
+  processRisk: "none" | "attention" | "critical" | null;
+  toolLife: number;
+  controlOverdue: boolean;
+}): OperatorDecision {
+  const tool = toolLifeBand(input.toolLife);
+  const actionKey = input.partOut
+    ? "operations.decision.verify"
+    : input.controlOverdue
+      ? "operations.decision.measure"
+      : tool === "replace"
+        ? "operations.decision.replace"
+        : input.processRisk === "critical"
+          ? "operations.decision.quality"
+          : "operations.action.continue";
+  return {
+    partKey: !input.hasMeasurement ? "spc.insufficient" : input.partOut ? "operations.part.out" : "operations.part.in",
+    partColor: !input.hasMeasurement ? decisionColor.muted : input.partOut ? decisionColor.bad : decisionColor.good,
+    processKey: input.processRisk === "critical" ? "operations.process.unstable" : input.processRisk === "attention" ? "operations.process.warning" : input.processRisk === "none" ? "operations.process.stable" : "spc.insufficient",
+    processColor: input.processRisk === "critical" ? decisionColor.bad : input.processRisk === "attention" ? decisionColor.warn : input.processRisk === "none" ? decisionColor.good : decisionColor.muted,
+    toolKey: tool === "replace" ? "operations.tool.replace" : tool === "check" ? "operations.tool.check" : "operations.tool.ok",
+    toolColor: tool === "replace" ? decisionColor.bad : tool === "check" ? decisionColor.warn : decisionColor.good,
+    actionKey,
+  };
+}
+
 export function recommendAction(diagnosis: ProcessDiagnosis, score: number, context: ActionContext): RecommendedAction {
   return {
     action: actions[diagnosis],

@@ -40,10 +40,10 @@ describe("process gauge engine", () => {
     expect(result.diagnosis).toBe("INCREASING_VARIABILITY");
   });
 
-  it("marks the process out of control when a measurement leaves the band", () => {
-    const result = gauge({ measurements: [10, 10.001, 9.999, 10, 10.001, 10, 10.002, 9.998, 10, 10.08] });
-    expect(result.diagnosis).toBe("PROCESS_OUT_OF_CONTROL");
-    expect(result.state).toBe("CRITICAL");
+  it("keeps a single out-of-tolerance piece off the process alarm", () => {
+    const result = gauge({ measurements: [10, 10.001, 9.999, 10, 10.001, 10, 10.002, 9.998, 10, 10.051] });
+    expect(result.diagnosis).not.toBe("PROCESS_OUT_OF_CONTROL");
+    expect(result.state).not.toBe("CRITICAL");
   });
 
   it("returns to stable after a tool replacement clears the trend marker", () => {

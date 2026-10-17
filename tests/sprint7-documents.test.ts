@@ -5,7 +5,8 @@ import { signIn, signUp } from "@/server/auth-actions";
 import { acceptInvitation, inviteUser } from "@/server/membership-actions";
 import { cancelDraft, completeOrder, createDraftOrder, startOrder } from "@/server/order-actions";
 import { createPart } from "@/server/part-actions";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenant } from "@/lib/prisma";
+import { readSession } from "@/lib/session";
 import { GET } from "@/app/dashboard/documents/[kind]/[id]/route";
 import CertificationsPage from "@/app/dashboard/quality/certifications/page";
 
@@ -39,7 +40,6 @@ function pdf(name: string) {
 
 afterAll(async () => {
   await prisma.$disconnect();
-  await (globalThis as { __ppiPg?: { stop: () => Promise<void> } }).__ppiPg?.stop();
 });
 
 describe("sprint 7 documents", () => {
@@ -68,7 +68,9 @@ describe("sprint 7 documents", () => {
       await asUser("owner-a@demo.test", password);
     }
     await call(() => createPart(null, form({ name: "PERNO" })));
-    const part = await prisma.part.findFirstOrThrow({ where: { name: "PERNO" } });
+    const session = await readSession();
+    if (!session) throw new Error("missing session");
+    const part = await withTenant(session.companyId, (tx) => tx.part.findFirstOrThrow({ where: { companyId: session.companyId, name: "PERNO" } }));
     let orderSeq = 0;
     const make = async () => {
       orderSeq += 1;
@@ -86,7 +88,9 @@ describe("sprint 7 documents", () => {
           }),
         ),
       );
-      return (await prisma.productionOrder.findFirstOrThrow({ where: { partId: part.id, code }, orderBy: { id: "desc" } })).id;
+      const current = await readSession();
+      if (!current) throw new Error("missing session");
+      return (await withTenant(current.companyId, (tx) => tx.productionOrder.findFirstOrThrow({ where: { companyId: current.companyId, partId: part.id, code }, orderBy: { id: "desc" } }))).id;
     };
     draftId = await make();
     productionId = await make();
@@ -104,7 +108,9 @@ describe("sprint 7 documents", () => {
     const data = pdf("owner.pdf");
     data.set("orderId", draftId);
     expect(await call(() => documents.uploadDrawing(data))).toBe(`/dashboard/orders/${draftId}`);
-    drawingId = (await prisma.drawing.findFirstOrThrow({ where: { productionOrderId: draftId } })).id;
+    const drawingSession = await readSession();
+    if (!drawingSession) throw new Error("missing session");
+    drawingId = (await withTenant(drawingSession.companyId, (tx) => tx.drawing.findFirstOrThrow({ where: { companyId: drawingSession.companyId, productionOrderId: draftId } }))).id;
 
     await asUser("pm-a@demo.test", password);
     const pm = pdf("pm.pdf");
@@ -132,7 +138,9 @@ describe("sprint 7 documents", () => {
     const data = pdf("tech.pdf");
     data.set("orderId", draftId);
     expect(await call(() => documents.uploadTechnicalDocument(data))).toBe(`/dashboard/orders/${draftId}`);
-    technicalId = (await prisma.technicalDocument.findFirstOrThrow({ where: { productionOrderId: draftId } })).id;
+    const technicalSession = await readSession();
+    if (!technicalSession) throw new Error("missing session");
+    technicalId = (await withTenant(technicalSession.companyId, (tx) => tx.technicalDocument.findFirstOrThrow({ where: { productionOrderId: draftId, companyId: technicalSession.companyId } }))).id;
 
     await asUser("pm-a@demo.test", password);
     const pm = pdf("tech-pm.pdf");
@@ -175,7 +183,9 @@ describe("sprint 7 documents", () => {
     const live = pdf("cert-live.pdf");
     live.set("orderId", productionId);
     expect(await call(() => documents.uploadCertification(live))).toBe(`/dashboard/orders/${productionId}`);
-    certificationId = (await prisma.certification.findFirstOrThrow({ where: { productionOrderId: productionId } })).id;
+    const certificationSession = await readSession();
+    if (!certificationSession) throw new Error("missing session");
+    certificationId = (await withTenant(certificationSession.companyId, (tx) => tx.certification.findFirstOrThrow({ where: { productionOrderId: productionId, companyId: certificationSession.companyId } }))).id;
 
     await asUser("qm-a@demo.test", password);
     const qmLive = pdf("cert-qm.pdf");

@@ -2,15 +2,16 @@ import Link from "next/link";
 import { RoleName } from "@prisma/client";
 import { notFound, redirect } from "next/navigation";
 import { Cockpit } from "@/app/dashboard/operator/cockpit";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { t } from "@/lib/i18n";
 import { loadCockpitSnapshot } from "@/lib/live-gauge";
 import { withTenant } from "@/lib/prisma";
 import { personName, todayLabel } from "@/lib/session-identity";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export default async function FloorWatchPage({ params }: { params: Promise<{ userId: string }> }) {
   const { session, user, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER)) redirect("/dashboard");
+  if (!RoleEngine.isOwner(activeRoles)) redirect("/dashboard");
   const { userId } = await params;
   const station = await withTenant(session.companyId, async (tx) => tx.user.findFirst({
     where: {

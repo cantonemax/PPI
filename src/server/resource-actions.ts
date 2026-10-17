@@ -1,16 +1,18 @@
 "use server";
 
-import { Prisma, RoleName } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { isToolFamily } from "@/lib/tool-families";
 import type { Db } from "@/lib/prisma";
 import { withTenant } from "@/lib/prisma";
+import { updateOwned } from "@/lib/tenant-write";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 async function requirePlanner() {
   const member = await requireMember();
-  if (!hasRole(member.activeRoles, RoleName.OWNER) && !hasRole(member.activeRoles, RoleName.PRODUCTION_MANAGER)) {
+  if (!RoleEngine.canPlan(member.activeRoles)) {
     redirect("/dashboard");
   }
   return member;
@@ -74,7 +76,7 @@ export async function updateMachine(_state: string | null, formData: FormData): 
       where: { id: machineId, companyId: member.session.companyId, hiddenAt: null },
     });
     if (!machine) return;
-    await tx.machine.update({ where: { id: machine.id }, data: { name, hourlyRate } });
+    await updateOwned(tx.machine, machine.id, member.session.companyId, { name, hourlyRate });
   });
   revalidatePath("/dashboard/machines");
   redirect(`/dashboard/machines/${machineId}`);
@@ -89,7 +91,7 @@ export async function retireMachine(formData: FormData): Promise<void> {
     });
     if (!machine) return;
     if ((await references(tx, member.session.companyId, "machine", machine.id)) === 0) return;
-    await tx.machine.update({ where: { id: machine.id }, data: { retiredAt: new Date() } });
+    await updateOwned(tx.machine, machine.id, member.session.companyId, { retiredAt: new Date() });
   });
   revalidatePath(`/dashboard/machines/${machineId}`);
 }
@@ -103,7 +105,7 @@ export async function hideMachine(formData: FormData): Promise<void> {
     });
     if (!machine) return;
     if ((await references(tx, member.session.companyId, "machine", machine.id)) > 0) return;
-    await tx.machine.update({ where: { id: machine.id }, data: { hiddenAt: new Date() } });
+    await updateOwned(tx.machine, machine.id, member.session.companyId, { hiddenAt: new Date() });
   });
   revalidatePath("/dashboard/machines");
   redirect("/dashboard/machines");
@@ -139,7 +141,8 @@ export async function updateToolIdentity(formData: FormData): Promise<{ id: stri
   const tool = await withTenant(member.session.companyId, async (tx) => {
     const existing = await tx.tool.findFirst({ where: { id: toolId, companyId: member.session.companyId, hiddenAt: null } });
     if (!existing) return null;
-    return tx.tool.update({ where: { id: existing.id }, data: { name, description, toolFamily, manufacturer, notes } });
+    const updated = await updateOwned(tx.tool, existing.id, member.session.companyId, { name, description, toolFamily, manufacturer, notes });
+    return updated === 1 ? { ...existing, name, description, toolFamily, manufacturer, notes } : null;
   });
   if (!tool) return { error: "common.required" };
   revalidatePath("/dashboard/tools");
@@ -184,7 +187,7 @@ export async function updateTool(_state: string | null, formData: FormData): Pro
   await withTenant(member.session.companyId, async (tx) => {
     const tool = await tx.tool.findFirst({ where: { id: toolId, companyId: member.session.companyId, hiddenAt: null } });
     if (!tool) return;
-    await tx.tool.update({ where: { id: tool.id }, data: { name, unit, unitCost } });
+    await updateOwned(tx.tool, tool.id, member.session.companyId, { name, unit, unitCost });
   });
   revalidatePath("/dashboard/tools");
   redirect(`/dashboard/tools/${toolId}`);
@@ -199,7 +202,7 @@ export async function retireTool(formData: FormData): Promise<void> {
     });
     if (!tool) return;
     if ((await references(tx, member.session.companyId, "tool", tool.id)) === 0) return;
-    await tx.tool.update({ where: { id: tool.id }, data: { retiredAt: new Date() } });
+    await updateOwned(tx.tool, tool.id, member.session.companyId, { retiredAt: new Date() });
   });
   revalidatePath(`/dashboard/tools/${toolId}`);
 }
@@ -211,7 +214,7 @@ export async function hideTool(formData: FormData): Promise<void> {
     const tool = await tx.tool.findFirst({ where: { id: toolId, companyId: member.session.companyId, hiddenAt: null } });
     if (!tool) return;
     if ((await references(tx, member.session.companyId, "tool", tool.id)) > 0) return;
-    await tx.tool.update({ where: { id: tool.id }, data: { hiddenAt: new Date() } });
+    await updateOwned(tx.tool, tool.id, member.session.companyId, { hiddenAt: new Date() });
   });
   revalidatePath("/dashboard/tools");
   redirect("/dashboard/tools");
@@ -242,7 +245,7 @@ export async function updateMaterial(_state: string | null, formData: FormData):
       where: { id: materialId, companyId: member.session.companyId, hiddenAt: null },
     });
     if (!material) return;
-    await tx.material.update({ where: { id: material.id }, data: { name, unit, unitCost } });
+    await updateOwned(tx.material, material.id, member.session.companyId, { name, unit, unitCost });
   });
   revalidatePath("/dashboard/materials");
   redirect(`/dashboard/materials/${materialId}`);
@@ -257,7 +260,7 @@ export async function retireMaterial(formData: FormData): Promise<void> {
     });
     if (!material) return;
     if ((await references(tx, member.session.companyId, "material", material.id)) === 0) return;
-    await tx.material.update({ where: { id: material.id }, data: { retiredAt: new Date() } });
+    await updateOwned(tx.material, material.id, member.session.companyId, { retiredAt: new Date() });
   });
   revalidatePath(`/dashboard/materials/${materialId}`);
 }
@@ -271,7 +274,7 @@ export async function hideMaterial(formData: FormData): Promise<void> {
     });
     if (!material) return;
     if ((await references(tx, member.session.companyId, "material", material.id)) > 0) return;
-    await tx.material.update({ where: { id: material.id }, data: { hiddenAt: new Date() } });
+    await updateOwned(tx.material, material.id, member.session.companyId, { hiddenAt: new Date() });
   });
   revalidatePath("/dashboard/materials");
   redirect("/dashboard/materials");

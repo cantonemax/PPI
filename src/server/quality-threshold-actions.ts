@@ -5,7 +5,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireMember } from "@/lib/access";
 import { withTenant } from "@/lib/prisma";
-import { canManageQualityThresholds, qualityThresholdsValid } from "@/lib/quality-thresholds";
+import { qualityThresholdsValid } from "@/lib/quality-thresholds";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 function percent(value: FormDataEntryValue | null) {
   const parsed = Number(String(value ?? "").trim().replace("%", ""));
@@ -14,7 +15,7 @@ function percent(value: FormDataEntryValue | null) {
 
 export async function updateQualityThresholds(_state: string | null, formData: FormData): Promise<string | null> {
   const member = await requireMember();
-  if (!canManageQualityThresholds(member.activeRoles)) redirect("/dashboard");
+  if (!RoleEngine.hasQualityAccess(member.activeRoles)) redirect("/dashboard");
   const target = percent(formData.get("defaultQualityTarget"));
   const warning = percent(formData.get("defaultWarningDelta"));
   const critical = percent(formData.get("defaultCriticalDelta"));

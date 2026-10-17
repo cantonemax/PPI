@@ -18,7 +18,6 @@ export default function LoginPage() {
         <button disabled={pending} className="bg-stone-900 px-4 py-2 text-white">{t("auth.signIn")}</button>
       </form>
       <p className="mt-4 text-sm"><Link href="/forgot-password">{t("auth.forgot")}</Link></p>
-      <p className="mt-2 text-sm"><Link href="/signup">{t("auth.noAccount")}</Link></p>
     </main>
   );
 }

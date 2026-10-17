@@ -1,20 +1,26 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { OrderPhase, RoleName } from "@prisma/client";
+import { OrderPhase } from "@prisma/client";
 import { loadDepartmentGauges } from "@/lib/live-gauge";
 import { OwnerHome } from "@/app/dashboard/owner-home";
 import { personName, positionLabel, todayLabel } from "@/lib/session-identity";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { capability } from "@/lib/capability";
 import { evaluateSpc, summarizeDepartment } from "@/lib/ppi-spc-engine";
 import { ownerOrder, type CopilotSignal } from "@/lib/copilot";
 import { companySignals } from "@/lib/copilot-query";
 import { daysRemaining, deliveryBand, deliveryProbability, type DeliveryQuality, type RiskLevel } from "@/lib/delivery-probability";
+import { interpretQuality } from "@/lib/quality-evaluation";
 import { economicsForProduction } from "@/lib/economics-query";
-import { interpretQuality, qualityPercentFromCpk } from "@/lib/quality-evaluation";
+import { efficiencyPercent, productionProgressPercent, scrapPercent } from "@/lib/economics";
+import { ownerDesk } from "@/lib/owner-desk";
 import { resolveQualityThresholds } from "@/lib/quality-thresholds";
+import { formatCapability, formatCurrency, formatPercent } from "@/lib/kpi/kpi-formatting";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
+import { StatisticsEngine } from "@/lib/statistics/statistics-engine";
+import { SPCEngine } from "@/lib/spc/spc-engine";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 function SignalList({ signals }: { signals: CopilotSignal[] }) {
   return (
@@ -70,7 +76,7 @@ function companyDelivery(
       companyWarningDelta: company.warningDelta,
       companyCriticalDelta: company.criticalDelta,
     });
-    const qualityState: DeliveryQuality = cpk !== null && thresholds ? interpretQuality(qualityPercentFromCpk(cpk), thresholds.target, thresholds.warningDelta, thresholds.criticalDelta) : null;
+    const qualityState: DeliveryQuality = cpk !== null && thresholds ? interpretQuality(StatisticsEngine.qualityScore(cpk), thresholds.target, thresholds.warningDelta, thresholds.criticalDelta) : null;
     const materialRisk: RiskLevel = signals.some((signal) => signal.orderId === order.id && signal.code === "materialSuggestion" && signal.severity === "critical")
       ? "critical"
       : signals.some((signal) => signal.orderId === order.id && signal.code === "materialSuggestion") ? "moderate" : "none";
@@ -78,7 +84,7 @@ function companyDelivery(
       ? "critical"
       : signals.some((signal) => signal.orderId === order.id && signal.kind === "tooling") ? "moderate" : "none";
     const scored = deliveryProbability({
-      progress: order.targetQuantity > 0 ? (order.actual?.goodQuantity ?? 0) / order.targetQuantity : 0,
+      progress: (productionProgressPercent(order.actual?.goodQuantity ?? 0, order.targetQuantity) ?? 0) / 100,
       efficiencyRatio: estimated !== null && estimated > 0 ? actualTime / estimated : null,
       qualityState,
       materialRisk,
@@ -100,7 +106,7 @@ function efficiencyView(orders: { economics: { time: { estimated: number | null;
   const actual = orders.reduce((sum, order) => sum + order.economics.time.actual, 0);
   if (estimated <= 0) return { percent: null, ratio: null, actual: null, estimated: null };
   const ratio = actual / estimated;
-  return { percent: Math.round(ratio * 100), ratio, actual, estimated };
+  return { percent: ratio * 100, ratio, actual, estimated };
 }
 
 export function efficiencySeries(intervals: { startedAt: Date; endedAt: Date | null }[], estimated: number, unit: "MINUTE" | "HOUR", now = new Date()) {
@@ -125,7 +131,7 @@ export function qualityIndexSeries(values: number[], lower: number, upper: numbe
   const series: number[] = [];
   for (let count = 5; count <= values.length; count += 1) {
     const index = capability(values.slice(0, count), lower, upper);
-    if (index?.status === "indices") series.push(qualityPercentFromCpk(index.cpk));
+    if (index?.status === "indices") series.push(StatisticsEngine.qualityScore(index.cpk));
   }
   return series.length >= 2 ? series.slice(-16) : [];
 }
@@ -173,18 +179,15 @@ function byDay(dates: Date[]) {
 }
 
 function money(value: number | null) {
-  if (value === null) return t("economy.absent");
-  return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
+  return formatCurrency(value) ?? t("economy.absent");
 }
 
 export default async function DashboardPage() {
   const { session, user, activeRoles } = await requireMember();
-  const owner = hasRole(activeRoles, RoleName.OWNER);
-  const planner = owner || hasRole(activeRoles, RoleName.PRODUCTION_MANAGER);
-  const quality = hasRole(activeRoles, RoleName.QUALITY_MANAGER);
-  const operator = hasRole(activeRoles, RoleName.OPERATOR);
-  if (!planner && quality && !operator) redirect("/dashboard/quality");
-  if (!planner && !quality && operator) redirect("/dashboard/operator");
+  const owner = RoleEngine.isOwner(activeRoles);
+  const planner = RoleEngine.canPlan(activeRoles);
+  const home = RoleEngine.homePath(activeRoles);
+  if (home) redirect(home);
   const production = owner ? await economicsForProduction(session.companyId, user.company.timeUnit) : [];
   const signals = owner || planner ? await companySignals(session.companyId, user.company.timeUnit) : [];
   const visible = owner
@@ -216,7 +219,7 @@ export default async function DashboardPage() {
         tx.user.count({ where: { companyId: session.companyId, activeProductionOrderId: { not: null } } }),
         tx.scrap.findMany({ where: { companyId: session.companyId, productionOrder: { phase: OrderPhase.IN_PRODUCTION, hiddenAt: null } }, select: { pieceCount: true, occurredAt: true } }),
         tx.toolChange.aggregate({ where: { companyId: session.companyId, productionOrder: { phase: OrderPhase.IN_PRODUCTION, hiddenAt: null } }, _sum: { quantity: true } }),
-        tx.toolChange.findMany({ where: { companyId: session.companyId, productionOrder: { phase: OrderPhase.IN_PRODUCTION, hiddenAt: null } }, select: { quantity: true, occurredAt: true } }),
+        tx.toolChange.findMany({ where: { companyId: session.companyId, productionOrder: { phase: OrderPhase.IN_PRODUCTION, hiddenAt: null } }, select: { quantity: true, unitCost: true, occurredAt: true, productionOrderId: true } }),
         tx.estimateToolUse.aggregate({ where: { companyId: session.companyId, estimate: { productionOrder: { phase: OrderPhase.IN_PRODUCTION, hiddenAt: null } } }, _sum: { quantity: true } }),
         tx.materialConsumption.aggregate({ where: { companyId: session.companyId, productionOrder: { phase: OrderPhase.IN_PRODUCTION, hiddenAt: null } }, _sum: { quantity: true } }),
         tx.estimateMaterialUse.aggregate({ where: { companyId: session.companyId, estimate: { productionOrder: { phase: OrderPhase.IN_PRODUCTION, hiddenAt: null } } }, _sum: { quantity: true } }),
@@ -228,7 +231,7 @@ export default async function DashboardPage() {
     const economicsById = new Map(production.map((order) => [order.id, order.economics]));
     let scrapPieces = 0;
     let goodPieces = 0;
-    const qualityCards: { partName: string; cp: string; cpk: string; confidence: string; confidenceKey: "low" | "medium" | "good" | "high"; points: number[]; lowerLimit: number; upperLimit: number; lower: boolean; qualityTarget: number | null; qualityWarning: number | null; qualityDelta: number | null }[] = [];
+    const qualityCards: { partName: string; cp: string; cpk: string; confidence: string; confidenceKey: "low" | "medium" | "good" | "high"; points: number[]; outOfToleranceRate: number | null; lowerLimit: number; upperLimit: number; lower: boolean; qualityTarget: number | null; qualityWarning: number | null; qualityDelta: number | null }[] = [];
     const departmentRows: { orderId: string; label: string; spc: ReturnType<typeof evaluateSpc> }[] = [];
     const orders = picture.rows.map((order) => {
       const good = order.actual?.goodQuantity ?? 0;
@@ -238,7 +241,7 @@ export default async function DashboardPage() {
       const controls = order.controlPlan?.controls ?? [];
       const outside = controls.some((control) => {
         const latest = control.measurements.at(-1);
-        return latest ? Number(latest.value) < Number(control.lowerLimit) || Number(latest.value) > Number(control.upperLimit) : false;
+        return latest ? SPCEngine.outOfTolerance(Number(latest.value), Number(control.lowerLimit), Number(control.upperLimit)) : false;
       });
       for (const control of controls) {
         const values = control.measurements.map((measurement) => Number(measurement.value));
@@ -262,11 +265,12 @@ export default async function DashboardPage() {
           });
           qualityCards.push({
             partName: order.part.name,
-            cp: index.cp.toFixed(2),
-            cpk: index.cpk.toFixed(2),
+            cp: formatCapability(index.cp) ?? "",
+            cpk: formatCapability(index.cpk) ?? "",
             confidence: t(`quality.confidence.${index.confidence}`),
             confidenceKey: index.confidence,
             points: qualityIndexSeries(values, Number(control.lowerLimit), Number(control.upperLimit)),
+            outOfToleranceRate: SPCEngine.outOfToleranceRate(values, lower, upper),
             lowerLimit: Number(control.lowerLimit),
             upperLimit: Number(control.upperLimit),
             lower: signals.some((signal) => signal.orderId === order.id && signal.code === "cpk"),
@@ -295,18 +299,39 @@ export default async function DashboardPage() {
       };
     });
     const qualityCard = qualityCards.reduce<(typeof qualityCards)[number] | null>((lowest, card) => lowest === null || Number(card.cpk) < Number(lowest.cpk) ? card : lowest, null);
-    const departmentSpc = summarizeDepartment(departmentRows);
     const department = await loadDepartmentGauges(session.companyId);
+    const departmentSpc = summarizeDepartment(departmentRows);
+    const efficiency = efficiencyView(production);
+    const desk = ownerDesk({
+      departmentScores: department.map((machine) => machine.score),
+      averageCpk: departmentSpc.averageCpk,
+      efficiencyPercent: efficiencyPercent(
+        production.reduce((sum, order) => sum + order.economics.time.actual, 0),
+        production.reduce((sum, order) => sum + (order.economics.time.estimated ?? 0), 0) || null,
+      ),
+      scrapPercent: scrapPercent(scrapPieces, goodPieces + scrapPieces),
+      orders: production.map((order) => ({
+        id: order.id,
+        part: order.partName,
+        actualMargin: order.economics.actualMargin,
+        costDeviation: order.economics.costDeviation,
+      })),
+      toolEvents: picture.toolChanges.map((change) => ({
+        orderId: change.productionOrderId,
+        quantity: Number(change.quantity),
+        unitCost: Number(change.unitCost),
+      })),
+      activeAlerts: visible.filter((signal) => signal.severity !== "info").length,
+    });
     return (
       <OwnerHome
-        department={department}
         companyName={user.company.name}
         person={{ name: personName(user), role: positionLabel(activeRoles) }}
         today={todayLabel()}
         signals={visible}
         certifications={picture.certifications.length}
         qualityPoints={qualityCard?.points ?? []}
-        departmentSpc={departmentSpc}
+        desk={desk}
         mosaic={{
           orders: orders.length,
           criticalOrders: orders.filter((order) => visible.some((signal) => signal.orderId === order.id && signal.severity === "critical")).length,
@@ -315,13 +340,14 @@ export default async function DashboardPage() {
           qualityTarget: qualityCard?.qualityTarget ?? null,
           qualityWarning: qualityCard?.qualityWarning ?? null,
           qualityDelta: qualityCard?.qualityDelta ?? null,
-          scrap: goodPieces + scrapPieces > 0 ? `${Math.round((scrapPieces / (goodPieces + scrapPieces)) * 100)}%` : null,
+          outOfToleranceRate: qualityCard?.outOfToleranceRate ?? null,
+          scrap: formatPercent(scrapPercent(scrapPieces, goodPieces + scrapPieces)),
           scrapRiskSeries: scrapRiskSeries(goodPieces + scrapPieces, picture.scrapEvents),
           scrapProduced: goodPieces + scrapPieces > 0 ? goodPieces + scrapPieces : null,
           scrapPieces: goodPieces + scrapPieces > 0 ? scrapPieces : null,
           machines: new Set(picture.openMachines.filter((row) => row.endedAt === null).map((row) => row.machineId)).size,
-          efficiency: efficiencyView(production),
-          efficiencySeries: efficiencySeries(picture.openMachines, efficiencyView(production).estimated ?? 0, user.company.timeUnit),
+          efficiency,
+          efficiencySeries: efficiencySeries(picture.openMachines, efficiency.estimated ?? 0, user.company.timeUnit),
           toolTrend: toolRiskSeries(Number(picture.toolPlan ?? 0), picture.toolChanges),
           materialTrend: remainingSeries(Number(picture.materialPlan ?? 0), picture.materialUses),
           deliveryTrend: [],

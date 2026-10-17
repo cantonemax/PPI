@@ -3,11 +3,12 @@ import { OrderPhase, RoleName } from "@prisma/client";
 import { OrderSettingsForm } from "@/app/dashboard/orders/order-settings-form";
 import { OrdersShell } from "@/app/dashboard/orders/orders-shell";
 import { controlsFromSnapshot } from "@/lib/order-controls";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { personName, positionLabel, todayLabel } from "@/lib/session-identity";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
 import { saveOrderSettings } from "@/server/order-actions";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 function text(value: { toString(): string } | null | undefined) {
   return value ? value.toString() : "";
@@ -16,8 +17,8 @@ function text(value: { toString(): string } | null | undefined) {
 export default async function OrderSettingsPage({ params }: { params: Promise<{ orderId: string }> }) {
   const { orderId } = await params;
   const { session, user, activeRoles } = await requireMember();
-  const planner = hasRole(activeRoles, RoleName.OWNER) || hasRole(activeRoles, RoleName.PRODUCTION_MANAGER);
-  const operator = hasRole(activeRoles, RoleName.OPERATOR);
+  const planner = RoleEngine.canPlan(activeRoles);
+  const operator = RoleEngine.isOperator(activeRoles);
   const selectable = { companyId: session.companyId, hiddenAt: null, retiredAt: null };
   const [order, machines, tools, operators] = await withTenant(session.companyId, (tx) => Promise.all([
     tx.productionOrder.findFirst({

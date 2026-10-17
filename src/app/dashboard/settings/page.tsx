@@ -4,12 +4,12 @@ import { OwnerFrame } from "@/app/dashboard/owner-home";
 import { personName, positionLabel } from "@/lib/session-identity";
 import { requireMember } from "@/lib/access";
 import { companySignals } from "@/lib/copilot-query";
-import { canManageQualityThresholds } from "@/lib/quality-thresholds";
 import { withTenant } from "@/lib/prisma";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export default async function SettingsPage() {
   const { session, user, activeRoles } = await requireMember();
-  if (!canManageQualityThresholds(activeRoles)) redirect("/dashboard");
+  if (!RoleEngine.hasQualityAccess(activeRoles)) redirect("/dashboard");
   const signals = await companySignals(session.companyId, user.company.timeUnit);
   const picture = await withTenant(session.companyId, async (tx) => {
     const [machines, orders, tools] = await Promise.all([

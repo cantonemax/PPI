@@ -5,19 +5,25 @@ import { QualityRulesForm } from "@/app/dashboard/orders/quality-rules-form";
 import { ComparisonSection } from "@/app/dashboard/orders/comparison";
 import { OrdersShell, type OrdersView } from "@/app/dashboard/orders/orders-shell";
 import { ScheduleWatch } from "@/app/dashboard/orders/schedule-watch";
-import { canSeeEconomics, hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { personName, positionLabel, todayLabel } from "@/lib/session-identity";
 import { comparisonPaused, deliveryPaused } from "@/lib/service-phase";
 import { economicsForOrder } from "@/lib/economics-query";
+import { productionProgressPercent } from "@/lib/economics";
+import { StatisticsEngine } from "@/lib/statistics/statistics-engine";
 import { companySignals } from "@/lib/copilot-query";
 import { capability } from "@/lib/capability";
 import { t } from "@/lib/i18n";
 import { daysRemaining, deliveryProbability, type DeliveryQuality, type RiskLevel } from "@/lib/delivery-probability";
-import { interpretQuality, qualityPercentFromCpk } from "@/lib/quality-evaluation";
+import { interpretQuality } from "@/lib/quality-evaluation";
 import { resolveQualityThresholds } from "@/lib/quality-thresholds";
 import { withTenant } from "@/lib/prisma";
 import { romeDateTimeLabel, romeDateTimeLocal } from "@/lib/rome-time";
 import { assignOrderDesk, cancelDraft, cancelStart, clearScheduledStart, completeOrder, duplicateOrder, reopenOrder, scheduleOrderStart, startOrder } from "@/server/order-actions";
+import { ToolHistoryPanel } from "@/app/dashboard/tools/tool-history-panel";
+import { toolHistory, toolKpis, type ToolEstimateLine, type ToolHistoryEvent } from "@/lib/tool-history";
+import { formatCount, formatCurrency } from "@/lib/kpi/kpi-formatting";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 async function ComparisonBlock({
   companyId,
@@ -70,9 +76,9 @@ export default async function OrderDetailPage({
   const { orderId } = await params;
   const { error } = await searchParams;
   const { session, user, activeRoles } = await requireMember();
-  const economic = canSeeEconomics(activeRoles);
-  const planner = hasRole(activeRoles, RoleName.OWNER) || hasRole(activeRoles, RoleName.PRODUCTION_MANAGER);
-  const quality = hasRole(activeRoles, RoleName.OWNER) || hasRole(activeRoles, RoleName.QUALITY_MANAGER);
+  const economic = RoleEngine.hasEconomyAccess(activeRoles);
+  const planner = RoleEngine.canPlan(activeRoles);
+  const quality = RoleEngine.canCertify(activeRoles);
   if (!planner && !quality) redirect("/dashboard");
   const order = await withTenant(session.companyId, (tx) => tx.productionOrder.findFirst({
     where: { id: orderId, companyId: session.companyId, hiddenAt: null },
@@ -86,6 +92,7 @@ export default async function OrderDetailPage({
       technicalDocuments: { orderBy: { addedAt: "desc" } },
       productionNotes: { orderBy: { addedAt: "desc" } },
       certifications: quality ? { orderBy: { addedAt: "desc" } } : false,
+      toolChanges: { include: { tool: true }, orderBy: { occurredAt: "desc" } },
     },
   }));
   if (!order?.estimate) notFound();
@@ -225,8 +232,56 @@ export default async function OrderDetailPage({
         </div>
       </section>
       {certified && Array.isArray(order.certifications) ? <CertificationSection orderId={order.id} phase={order.phase} rows={order.certifications} /> : null}
+      <OrderToolHistory order={order} showCost={economic} />
       </div>
     </OrdersShell>
+  );
+}
+
+function OrderToolHistory({
+  order,
+  showCost,
+}: {
+  order: {
+    id: string;
+    phase: OrderPhase;
+    part: { id: string; name: string };
+    estimate: { toolUses: { toolId: string; quantity: { toString(): string } }[] } | null;
+    toolChanges: { toolId: string; quantity: { toString(): string }; unitCost: { toString(): string }; occurredAt: Date; tool: { name: string } }[];
+  };
+  showCost: boolean;
+}) {
+  const events: ToolHistoryEvent[] = order.toolChanges.map((change) => ({
+    toolId: change.toolId,
+    orderId: order.id,
+    partId: order.part.id,
+    quantity: Number(change.quantity),
+    unitCost: Number(change.unitCost),
+    occurredAt: change.occurredAt.getTime(),
+    current: order.phase === OrderPhase.IN_PRODUCTION,
+  }));
+  const estimates: ToolEstimateLine[] = (order.estimate?.toolUses ?? []).map((use) => ({
+    toolId: use.toolId,
+    partId: order.part.id,
+    quantity: Number(use.quantity),
+  }));
+  const names = new Map(order.toolChanges.map((change) => [change.toolId, change.tool.name]));
+  const summary = [...new Set(events.map((event) => event.toolId))].map((toolId) => {
+    const kpis = toolKpis(toolId, events, estimates);
+    const last = kpis.lastRecordedChange === null ? t("order.none") : romeDateTimeLabel(new Date(kpis.lastRecordedChange));
+    return { label: names.get(toolId) ?? t("floor.tool"), value: `${formatCount(kpis.totalToolChanges)} · ${last}` };
+  });
+  const rows = toolHistory(events).map((event) => ({
+    when: romeDateTimeLabel(new Date(event.occurredAt)),
+    order: order.id.slice(-6).toUpperCase(),
+    part: order.part.name,
+    quantity: String(event.quantity),
+    cost: formatCurrency(event.unitCost) ?? t("order.none"),
+  }));
+  return (
+    <section className={card}>
+      <ToolHistoryPanel summary={summary} rows={rows} showCost={showCost} tone="dark" />
+    </section>
   );
 }
 
@@ -265,7 +320,7 @@ async function DeliveryBlock({
     companyWarningDelta: company.warningDelta,
     companyCriticalDelta: company.criticalDelta,
   });
-  const qualityState: DeliveryQuality = cpk !== null && thresholds ? interpretQuality(qualityPercentFromCpk(cpk), thresholds.target, thresholds.warningDelta, thresholds.criticalDelta) : null;
+  const qualityState: DeliveryQuality = cpk !== null && thresholds ? interpretQuality(StatisticsEngine.qualityScore(cpk), thresholds.target, thresholds.warningDelta, thresholds.criticalDelta) : null;
   const materialRisk: RiskLevel = signals.some((signal) => signal.orderId === order.id && signal.code === "materialSuggestion" && signal.severity === "critical")
     ? "critical"
     : signals.some((signal) => signal.orderId === order.id && signal.code === "materialSuggestion") ? "moderate" : "none";
@@ -276,7 +331,7 @@ async function DeliveryBlock({
   const actualTime = loaded?.economics.time.actual ?? 0;
   const result = order.plannedDeliveryAt
     ? deliveryProbability({
-      progress: order.targetQuantity > 0 ? (order.actual?.goodQuantity ?? 0) / order.targetQuantity : 0,
+      progress: (productionProgressPercent(order.actual?.goodQuantity ?? 0, order.targetQuantity) ?? 0) / 100,
       efficiencyRatio: estimated !== null && estimated > 0 ? actualTime / estimated : null,
       qualityState,
       materialRisk,

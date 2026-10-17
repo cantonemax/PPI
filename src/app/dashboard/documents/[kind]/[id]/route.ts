@@ -1,8 +1,8 @@
-import { RoleName } from "@prisma/client";
 import { NextResponse } from "next/server";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { readObject } from "@/lib/object-storage";
 import { withTenant } from "@/lib/prisma";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 function mediaType(name: string) {
   const lower = name.toLowerCase();
@@ -49,10 +49,10 @@ export async function GET(_request: Request, context: { params: Promise<{ kind: 
   if (!model) return new NextResponse(null, { status: 404 });
 
   const member = await requireMember();
-  const owner = hasRole(member.activeRoles, RoleName.OWNER);
-  const planner = owner || hasRole(member.activeRoles, RoleName.PRODUCTION_MANAGER);
-  const quality = owner || hasRole(member.activeRoles, RoleName.QUALITY_MANAGER);
-  const floor = owner || hasRole(member.activeRoles, RoleName.OPERATOR);
+  const owner = RoleEngine.isOwner(member.activeRoles);
+  const planner = RoleEngine.canPlan(member.activeRoles);
+  const quality = RoleEngine.canCertify(member.activeRoles);
+  const floor = RoleEngine.canOperate(member.activeRoles);
 
   const file = await withTenant(member.session.companyId, async (tx) => {
     if (model === "drawing") return tx.drawing.findFirst({ where: { id, companyId: member.session.companyId }, include: { productionOrder: true } });

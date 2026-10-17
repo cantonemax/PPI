@@ -3,6 +3,7 @@ import { type DrawingMarker, type DrawingReference } from "@/lib/drawing-referen
 import { evaluateProcessGauge, type GaugeResult } from "@/lib/process-gauge";
 import { withTenant } from "@/lib/prisma";
 import { personName } from "@/lib/session-identity";
+import { romeDateTimeLabel } from "@/lib/rome-time";
 
 const orderGaugeInclude = {
   scraps: true,
@@ -15,6 +16,17 @@ const orderGaugeInclude = {
 } satisfies Prisma.ProductionOrderInclude;
 
 type GaugeOrder = Prisma.ProductionOrderGetPayload<{ include: typeof orderGaugeInclude }>;
+
+export function persistedToolLife(plannedQuantity: number, usedQuantity: number): number {
+  if (!(plannedQuantity > 0)) return 100;
+  return Math.max(0, Math.min(100, Math.round((1 - usedQuantity / plannedQuantity) * 100)));
+}
+
+export function currentToolRecord(changes: { toolId: string; name: string; occurredAt: number }[], estimated: { toolId: string; name: string } | null) {
+  const latest = [...changes].sort((left, right) => right.occurredAt - left.occurredAt)[0];
+  if (latest) return { toolId: latest.toolId, name: latest.name };
+  return estimated ?? { toolId: "", name: "" };
+}
 
 export function liveProcessGauge(order: GaugeOrder, runtimeMinutes: number): GaugeResult | null {
   const controls = (order.controlPlan?.controls ?? []).map((control) => ({
@@ -29,7 +41,7 @@ export function liveProcessGauge(order: GaugeOrder, runtimeMinutes: number): Gau
   const produced = (order.actual?.goodQuantity ?? 0) + scrap;
   const planned = order.estimate?.toolUses.reduce((sum, use) => sum + Number(use.quantity), 0) ?? 0;
   const used = order.toolChanges.reduce((sum, change) => sum + Number(change.quantity), 0);
-  const toolLife = planned <= 0 ? 100 : Math.max(0, Math.min(100, Math.round((1 - used / planned) * 100)));
+  const toolLife = persistedToolLife(planned, used);
   return evaluateProcessGauge({
     measurements: control.values,
     toleranceMin: control.lower,
@@ -96,9 +108,11 @@ export type CockpitSnapshot = {
   remaining: number;
   scrap: number;
   tool: string;
+  toolId: string;
   life: number;
   runtime: number;
   toolChanges: number;
+  toolHistory: { when: string; quantity: string; name: string }[];
   measurements: number[];
   target: number;
   min: number;
@@ -172,7 +186,7 @@ export async function loadCockpitSnapshot(companyId: string, userId: string): Pr
             ...orderGaugeInclude,
             drawings: { orderBy: { addedAt: "desc" }, take: 1 },
             machineTimes: { include: { machine: true }, orderBy: { startedAt: "desc" } },
-            estimate: { include: { toolUses: true, machine: true } },
+            estimate: { include: { toolUses: { include: { tool: true } }, machine: true } },
           },
         },
       },
@@ -192,7 +206,7 @@ export async function loadCockpitSnapshot(companyId: string, userId: string): Pr
             ...orderGaugeInclude,
             drawings: { orderBy: { addedAt: "desc" }, take: 1 },
             machineTimes: { include: { machine: true }, orderBy: { startedAt: "desc" } },
-            estimate: { include: { toolUses: true, machine: true } },
+            estimate: { include: { toolUses: { include: { tool: true } }, machine: true } },
           },
         });
     if (!order) return null;
@@ -202,6 +216,11 @@ export async function loadCockpitSnapshot(companyId: string, userId: string): Pr
     const produced = (order.actual?.goodQuantity ?? 0) + scrap;
     const plannedTools = order.estimate?.toolUses.reduce((sum, use) => sum + Number(use.quantity), 0) ?? 0;
     const usedTools = order.toolChanges.reduce((sum, change) => sum + Number(change.quantity), 0);
+    const estimatedTool = order.estimate?.toolUses[0]?.tool;
+    const tool = currentToolRecord(
+      order.toolChanges.map((change) => ({ toolId: change.toolId, name: change.tool.name, occurredAt: change.occurredAt.getTime() })),
+      estimatedTool ? { toolId: estimatedTool.id, name: estimatedTool.name } : null,
+    );
     const controls = (order.controlPlan?.controls ?? []).flatMap((control) => {
       const reference = letters.find((letter) => control.name.startsWith(`${letter} `));
       if (!reference) return [];
@@ -234,10 +253,16 @@ export async function loadCockpitSnapshot(companyId: string, userId: string): Pr
       produced,
       remaining: Math.max(0, order.targetQuantity - worked),
       scrap,
-      tool: order.toolChanges[0]?.tool.name ?? "",
-      life: plannedTools <= 0 ? 100 : Math.max(0, Math.min(100, Math.round((1 - usedTools / plannedTools) * 100))),
+      tool: tool.name,
+      toolId: tool.toolId,
+      life: persistedToolLife(plannedTools, usedTools),
       runtime: open ? runtimeMinutes(open.startedAt, now) : 0,
       toolChanges: order.toolChanges.length,
+      toolHistory: order.toolChanges.map((change) => ({
+        when: romeDateTimeLabel(change.occurredAt),
+        quantity: String(Number(change.quantity)),
+        name: change.tool.name,
+      })),
       measurements: [...(primary?.measurements ?? [])].sort((left, right) => left.recordedAt.getTime() - right.recordedAt.getTime()).map((item) => Number(item.value)),
       target: primary ? Number(primary.nominal) : 0,
       min: primary ? Number(primary.lowerLimit) : 0,

@@ -15,8 +15,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum RoleName {
@@ -41,6 +42,40 @@ enum OrderPhase {
 enum TimeUnit {
   MINUTE
   HOUR
+}
+
+enum PlanStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum PlanChangeAction {
+  PLAN_CREATED
+  PLAN_MODIFIED
+  FEATURE_ADDED
+  FEATURE_REMOVED
+  PRICE_CHANGED
+  LIMIT_CHANGED
+  PLAN_DISABLED
+  PLAN_REACTIVATED
+}
+
+enum PlatformAccess {
+  SUPER_ADMIN
+  PLATFORM_ADMIN
+  READ_ONLY
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum ContractStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  EXPIRED
 }
 
 enum AuditAction {
@@ -79,6 +114,16 @@ enum AuditAction {
   CONTROL_CREATED
   CONTROL_UPDATED
   MEASUREMENT_RECORDED
+  COMPANY_UPDATED
+  OWNER_ASSIGNED
+  OWNER_CHANGED
+  PLAN_CHANGED
+  CONTRACT_CHANGED
+  COMPANY_SUSPENDED
+  COMPANY_DELETED
+  COMPANY_RESTORED
+  PAYMENT_UPDATED
+  RENEWAL_UPDATED
 }
 
 enum AuditSubjectType {
@@ -112,6 +157,37 @@ model Company {
   alarmTone                String  @default("pulse")
   criticalScreenEnabled    Boolean @default(true)
   closedAt DateTime?
+  businessName             String?
+  vatNumber                String?
+  taxCode                  String?
+  pec                      String?
+  email                    String?
+  phone                    String?
+  mobile                   String?
+  website                  String?
+  addressLine              String?
+  zipCode                  String?
+  city                     String?
+  province                 String?
+  country                  String?
+  planId                   String
+  plan                     Plan     @relation(fields: [planId], references: [id])
+  billingCycle             BillingCycle @default(MONTHLY)
+  contractStatus           ContractStatus @default(TRIAL)
+  activatedAt              DateTime?
+  renewalAt                DateTime?
+  expiresAt                DateTime?
+  lastPaymentAt            DateTime?
+  nextPaymentAt            DateTime?
+  contractNotes            String?
+  notes                    String?
+  region                   String?
+  customerSince            DateTime?
+  monthlyRevenue           Decimal?  @db.Decimal(18, 2)
+  annualRevenue            Decimal?  @db.Decimal(18, 2)
+  annualDiscountPercent    Decimal   @default(0) @db.Decimal(5, 2)
+  deletedAt                DateTime?
+  deletedBy                String?
 
   users                  User[]
   roleAssignments        RoleAssignment[]
@@ -147,6 +223,65 @@ model Company {
   auditEvents            AuditEvent[]
 
   @@index([closedAt])
+  @@index([deletedAt])
+  @@index([planId])
+}
+
+model PlanFeatureDefinition {
+  key       String        @id
+  sortOrder Int
+  features  PlanFeature[]
+}
+
+model Plan {
+  id                    String     @id @default(cuid())
+  name                  String
+  description           String?
+  badgeColor            String     @default("#2dd4bf")
+  displayOrder          Int        @default(0)
+  status                PlanStatus @default(ACTIVE)
+  monthlyPrice          Decimal    @default(0) @db.Decimal(18, 2)
+  annualPrice           Decimal    @default(0) @db.Decimal(18, 2)
+  activationFee         Decimal    @default(0) @db.Decimal(18, 2)
+  annualDiscountPercent Decimal    @default(0) @db.Decimal(18, 2)
+  customPricingAllowed  Boolean    @default(false)
+  maxUsers              Int?
+  maxDepartments        Int?
+  maxMachines           Int?
+  maxOrders             Int?
+  maxMeasurements       Int?
+  maxStorageMb          Int?
+  notes                 String?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+  features              PlanFeature[]
+  companies             Company[]
+  changes               PlanChange[]
+}
+
+model PlanFeature {
+  planId     String
+  featureKey String
+  enabled    Boolean                @default(false)
+  plan       Plan                   @relation(fields: [planId], references: [id], onDelete: Cascade)
+  definition PlanFeatureDefinition @relation(fields: [featureKey], references: [key])
+
+  @@id([planId, featureKey])
+}
+
+model PlanChange {
+  id            String           @id @default(cuid())
+  planId        String
+  occurredAt    DateTime         @default(now())
+  actorName     String
+  actorEmail    String
+  action        PlanChangeAction
+  previousValue String?
+  newValue      String?
+  reason        String?
+  plan          Plan             @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId, occurredAt])
 }
 
 model User {
@@ -155,6 +290,9 @@ model User {
   email                   String    @unique
   firstName               String?
   lastName                String?
+  phone                   String?
+  createdAt               DateTime  @default(now())
+  lastLoginAt             DateTime?
   revokedAt               DateTime?
   activeProductionOrderId String?
 

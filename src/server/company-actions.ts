@@ -1,12 +1,13 @@
 "use server";
 
-import { CompanyAppearance, RoleName } from "@prisma/client";
+import { CompanyAppearance } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { alarmTones, alarmToneValue, type AlarmToneFlags } from "@/lib/alarm-tones";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { objectKey, writeObject } from "@/lib/object-storage";
 import { withTenant } from "@/lib/prisma";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 const imageTypes = new Map([
   ["image/png", "png"],
@@ -16,7 +17,7 @@ const imageTypes = new Map([
 
 export async function saveCompanyDesk(formData: FormData): Promise<void> {
   const member = await requireMember();
-  if (!hasRole(member.activeRoles, RoleName.OWNER)) redirect("/dashboard");
+  if (!RoleEngine.isOwner(member.activeRoles)) redirect("/dashboard");
   const slogan = String(formData.get("slogan") ?? "").trim().slice(0, 80);
   const appearance = formData.get("appearance") === "FLOOR" ? CompanyAppearance.FLOOR : CompanyAppearance.DARK;
   const alarmSoundEnabled = formData.get("alarmSound") === "on";

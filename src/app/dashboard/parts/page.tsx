@@ -1,14 +1,14 @@
 import Link from "next/link";
-import { RoleName } from "@prisma/client";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { PartForm } from "@/app/dashboard/parts/part-form";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 export default async function PartsPage() {
   const { session, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER) && !hasRole(activeRoles, RoleName.PRODUCTION_MANAGER)) {
+  if (!RoleEngine.canPlan(activeRoles)) {
     redirect("/dashboard");
   }
   const [parts, tools] = await withTenant(session.companyId, (tx) => Promise.all([

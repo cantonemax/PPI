@@ -1,8 +1,10 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "@/lib/i18n";
+import { registerToolChange } from "@/server/floor-actions";
 import { loadOperationalMatch } from "@/lib/ppi-configuration";
 import { MarkerBoard } from "@/app/dashboard/marker-board";
 import { defaultDrawingMarkers, type DrawingMarker } from "@/lib/drawing-references";
@@ -10,6 +12,9 @@ import { saveOrderMarkers } from "@/server/order-actions";
 import { alarmToneFlags, playAlarm, startSiren } from "@/lib/alarm-tones";
 import { type CockpitSnapshot } from "@/lib/live-gauge";
 import { evaluateSpc } from "@/lib/ppi-spc-engine";
+import { SPCEngine } from "@/lib/spc/spc-engine";
+import { formatCapability, formatPercent } from "@/lib/kpi/kpi-formatting";
+import { operatorDecision } from "@/lib/recommended-action";
 import { recordMeasurement as saveMeasurement, resetOrderMeasurements } from "@/server/quality-actions";
 import { createProcessMemory, recordMeasurement as storeMeasurement } from "@/lib/process-memory";
 import { canUseVoiceControl } from "@/lib/voice-policy";
@@ -92,9 +97,11 @@ const emptySnapshot: CockpitSnapshot = {
   remaining: 0,
   scrap: 0,
   tool: "",
+  toolId: "",
   life: 100,
   runtime: 0,
   toolChanges: 0,
+  toolHistory: [],
   measurements: [],
   target: 0,
   min: 0,
@@ -105,6 +112,7 @@ const emptySnapshot: CockpitSnapshot = {
 };
 
 export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalScreen = true, readOnly = false }: { snapshot: CockpitSnapshot | null; alarmSound?: boolean; alarmTone?: string; criticalScreen?: boolean; readOnly?: boolean }) {
+  const router = useRouter();
   const job = snapshot ?? emptySnapshot;
   const [mode, setMode] = useState<"manual" | "usb" | "bluetooth">("manual");
   const [controlPlan] = useState(job.controls);
@@ -116,7 +124,8 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
   const [series, setSeries] = useState<Record<string, number[]>>(() => Object.fromEntries(job.controls.map((item) => [item.reference, item.values])));
   const [gaugeReference, setGaugeReference] = useState<string | null>(() => [...job.controls].sort((left, right) => right.values.length - left.values.length)[0]?.reference ?? null);
   const [marker, setMarker] = useState(0);
-  const [toolEvents, setToolEvents] = useState(0);
+  const [toolEvents, setToolEvents] = useState(job.toolChanges);
+  const [toolPending, setToolPending] = useState(false);
   const [scrapCount] = useState(0);
   const [runtime] = useState(120);
   const [drawingOpen, setDrawingOpen] = useState(false);
@@ -156,6 +165,7 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
     setRemaining(snapshot.remaining);
     setProduced(snapshot.produced);
     setLife(snapshot.life);
+    setToolEvents(snapshot.toolChanges);
   }, [snapshot]);
   const memory = useRef(createProcessMemory());
   const gaugeControl = controlPlan.find((item) => item.reference === gaugeReference);
@@ -195,7 +205,7 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
           : undefined;
   const tones = alarmToneFlags(alarmTone);
   const critical = gaugeState === "CRITICAL";
-  const outside = measurements.slice(-10).some((value) => value < gaugeMin || value > gaugeMax);
+  const outside = SPCEngine.outOfTolerance(measurements.at(-1), gaugeMin, gaugeMax);
   const sirenOn = alarmSound && tones.siren && !readOnly && outside && !sirenHeld;
   const [sirenSlot, setSirenSlot] = useState<HTMLElement | null>(null);
   const [resetSlot, setResetSlot] = useState<HTMLElement | null>(null);
@@ -215,6 +225,13 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
   }, [sirenOn]);
   const due = nextIn <= 0;
   const valueReady = measured.trim() !== "";
+  const decision = operatorDecision({
+    hasMeasurement: measurements.some((value) => Number.isFinite(value)),
+    partOut: outside,
+    processRisk: SPCEngine.activeSpcRisk(measurements, gaugeMin, gaugeMax),
+    toolLife: life,
+    controlOverdue: due,
+  });
 
   async function recordMeasurement() {
     if (readOnly || saving) return;
@@ -296,12 +313,25 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
     setSaveNote("");
   }
 
-  function replaceTool() {
-    if (readOnly) return;
-    setLife(100);
+  async function replaceTool() {
+    if (readOnly || toolPending) return;
+    if (!job.toolId) {
+      setToolNote(t("operations.toolMissing"));
+      return;
+    }
+    setToolPending(true);
+    const formData = new FormData();
+    formData.set("toolId", job.toolId);
+    formData.set("quantity", "1");
+    const error = await registerToolChange(null, formData);
+    setToolPending(false);
+    if (error) {
+      setToolNote(t(error));
+      return;
+    }
     setMarker(measurements.length);
-    setToolEvents((count) => count + 1);
     setToolNote(t("operations.toolRecorded"));
+    router.refresh();
   }
 
   return (
@@ -341,8 +371,14 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
         <Fact label={t("operations.worked")} value={String(worked)} />
         <Fact label={t("operations.remaining")} value={String(remaining)} />
       </header>
+      <section className="relative grid shrink-0 grid-cols-4 gap-2">
+        <Decision label={t("operations.block.part")} value={t(decision.partKey)} color={decision.partColor} />
+        <Decision label={t("operations.block.process")} value={t(decision.processKey)} color={decision.processColor} />
+        <Decision label={t("operations.block.tool")} value={t(decision.toolKey)} color={decision.toolColor} />
+        <Decision label={t("operations.block.action")} value={t(decision.actionKey)} color="#F4F7F8" />
+      </section>
       <div className="relative grid min-h-0 flex-1 grid-cols-8 grid-rows-[minmax(0,1.65fr)_minmax(0,1fr)] gap-1.5 overflow-hidden">
-          <div ref={letterRow} className="col-span-8 grid min-h-0 grid-cols-[minmax(0,1.45fr)_max-content_minmax(0,1fr)_minmax(0,1fr)] gap-x-1.5" style={{ gridTemplateRows: `auto repeat(${Math.max(controlPlan.length, 1)}, minmax(0, 1fr))` }}>
+          <div ref={letterRow} className="col-span-8 grid min-h-0 grid-cols-[minmax(0,1.45fr)_max-content_minmax(0,1.2fr)] gap-x-1.5" style={{ gridTemplateRows: `auto repeat(${Math.max(controlPlan.length, 1)}, minmax(0, 1fr))` }}>
           <section className={`${card} row-span-full !grid h-full min-h-0 !items-stretch grid-cols-[minmax(8rem,0.7fr)_minmax(0,1.3fr)] grid-rows-subgrid gap-x-3 !p-0 border-2 border-white/10 px-3 pb-2`}>
               <p className={`${cardTitle} col-span-2 flex items-end pb-2 pt-3 !text-left`}>{t("operations.controlNow")}</p>
                 {controlPlan.map((item) => {
@@ -395,42 +431,32 @@ export function Cockpit({ snapshot, alarmSound = true, alarmTone = "", criticalS
               <p className={`${stateText} m-auto`}>{t("operations.waiting")}</p>
             )}
           </section>
-          <section className={`${card} row-span-full h-full min-h-0 !flex-row items-stretch overflow-hidden !border-2 !p-0`}>
-            <div className="flex w-1/2 flex-col items-center justify-center px-2">
-              <p className={cardTitle}>{t("spc.cp")}</p>
-              <p className={`${primary} mt-2.5 text-[#3CF0FF]`}>{spc.ready && spc.cp !== null ? spc.cp.toFixed(2) : t("spc.insufficient")}</p>
-            </div>
-            <div className="flex w-1/2 flex-col items-center justify-center border-l border-white/15 px-2">
-              <p className={cardTitle}>{t("spc.cpk")}</p>
-              <p className={`${primary} mt-2.5 text-[#3CF0FF]`}>{spc.ready && spc.cpk !== null ? spc.cpk.toFixed(2) : t("spc.insufficient")}</p>
-            </div>
-          </section>
           </div>
           <section className={`${card} col-span-3 h-full min-h-0 gap-2 overflow-auto !justify-between`}>
-            <p className={cardTitle}>{t("spc.gauge")}</p>
-            <p className={`${primary} !text-[38px]`} style={{ color: tone }}>{spc.ready ? score : t("spc.insufficient")}</p>
-            <p className={`${stateText} !text-[21px] !leading-none`} style={{ color: tone }}>{level}</p>
-            <p className={`${stateText} !text-[21px] !leading-none text-white`}>{`${t("spc.trend")} ${spc.trend ? t(`spc.trend.${spc.trend}`) : t("spc.insufficient")}`}</p>
-            <p className={`${secondary} !text-[21px] !leading-none`}>{`${t("spc.risk")} ${spc.risk ? t(`spc.risk.${spc.risk}`) : t("spc.insufficient")}`}</p>
+            <p className={cardTitle}>{t("operations.block.technical")}</p>
+            <p className={`${secondary} !text-[18px] !leading-tight text-white`}>{t("spc.cp")} {spc.ready && spc.cp !== null ? formatCapability(spc.cp) : t("spc.insufficient")}</p>
+            <p className={`${secondary} !text-[18px] !leading-tight text-white`}>{t("spc.cpk")} {spc.ready && spc.cpk !== null ? formatCapability(spc.cpk) : t("spc.insufficient")}</p>
+            <p className={`${secondary} !text-[16px] !leading-tight text-white`}>{`${t("spc.trend")} ${spc.trend ? t(`spc.trend.${spc.trend}`) : t("spc.insufficient")}`}</p>
+            <p className={`${secondary} !text-[16px] !leading-tight`} style={{ color: tone }}>{spc.ready ? `${score} · ${level}` : t("spc.insufficient")}</p>
+            <button type="button" onClick={() => { setDrawingZoom(1); setDrawingOpen(true); }} className={`${stateText} text-[#3CF0FF]`}>{t("operations.openDrawing")}</button>
           </section>
-          <section className={`${card} col-span-3 h-full min-h-0 gap-2 overflow-auto !justify-between`}>
+          <section className={`${card} col-span-5 h-full min-h-0 gap-2 overflow-auto !justify-between`}>
             <p className={cardTitle}>{t("operations.activeTool")}</p>
-            <p className={`${primary} !text-[38px]`} style={{ color: life > 20 ? "#00E676" : "#FF9800" }}>{life}%</p>
+            <p className={`${primary} !text-[38px]`} style={{ color: decision.toolColor }}>{formatPercent(life)}</p>
             <p className={`${stateText} !text-[21px] !leading-none text-white`}>{job.tool}</p>
+            <ul className="flex w-full flex-col gap-1">
+              {job.toolHistory.map((change) => (
+                <li key={`${change.when}-${change.name}-${change.quantity}`} className={`${secondary} !text-[13px] !leading-tight text-slate-300`}>
+                  {change.when} · {change.quantity} · {change.name}
+                </li>
+              ))}
+            </ul>
             <p className={`${secondary} !text-[21px] !leading-none`}>{t("operations.remainingLife")}</p>
             <div className="grid w-full grid-cols-2 gap-2">
-              <button type="button" onClick={() => { if (readOnly) return; replaceTool(); setSelectedTool("wear"); }} className={`${actionButton} !min-h-10 !text-[19px] font-medium uppercase ${readOnly ? "pointer-events-none" : ""} ${selectedTool === "wear" ? planButtonOn : ""}`}>{t("operations.wear")}</button>
-              <button type="button" onClick={() => { if (readOnly) return; replaceTool(); setSelectedTool("breakage"); }} className={`${actionButton} !min-h-10 !text-[19px] font-medium uppercase ${readOnly ? "pointer-events-none" : ""} ${selectedTool === "breakage" ? planButtonOn : ""}`}>{t("operations.breakage")}</button>
+              <button type="button" disabled={toolPending} onClick={() => { setSelectedTool("wear"); void replaceTool(); }} className={`${actionButton} !min-h-10 !text-[19px] font-medium uppercase ${readOnly || toolPending ? "pointer-events-none" : ""} ${selectedTool === "wear" ? planButtonOn : ""}`}>{t("operations.wear")}</button>
+              <button type="button" disabled={toolPending} onClick={() => { setSelectedTool("breakage"); void replaceTool(); }} className={`${actionButton} !min-h-10 !text-[19px] font-medium uppercase ${readOnly || toolPending ? "pointer-events-none" : ""} ${selectedTool === "breakage" ? planButtonOn : ""}`}>{t("operations.breakage")}</button>
             </div>
             {toolNote ? <p className={`${secondary} mt-1 !text-[13px] text-[#00E676]`}>{toolNote}</p> : null}
-          </section>
-          <section className={`${card} col-span-2 h-full min-h-0 overflow-auto`}>
-            <p className={cardTitle}>{t("operations.recommended")}</p>
-            <p className={`${primary} mt-2.5`}>{action ? t(action.action) : t("spc.insufficient")}</p>
-            {action ? <p className={`${stateText} mt-2.5 text-white`}>{`${t("operations.confidence")} ${action.confidence}%`}</p> : null}
-            <div className="mt-auto flex w-full flex-col gap-2 pt-3">
-              <button type="button" onClick={() => { setDrawingZoom(1); setDrawingOpen(true); }} className={`${stateText} text-[#3CF0FF]`}>{t("operations.openDrawing")}</button>
-            </div>
           </section>
         </div>
         {reportOpen ? (
@@ -579,6 +605,15 @@ function Legend({ swatch, label }: { swatch: string; label: string }) {
       <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: swatch }} />
       <span>{label}</span>
     </p>
+  );
+}
+
+function Decision({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-[#050d18] px-2 py-2 text-center">
+      <p className={title}>{label}</p>
+      <p className="truncate text-[clamp(0.95rem,1.5vw,1.35rem)] font-semibold leading-tight" style={{ color }}>{value}</p>
+    </div>
   );
 }
 

@@ -3,7 +3,8 @@
 import { OrderPhase, RoleName } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { hasRole, requireMember } from "@/lib/access";
+import { RoleEngine } from "@/lib/auth/role-engine";
+import { requireMember } from "@/lib/access";
 import { objectKey, removeObject, writeObject } from "@/lib/object-storage";
 import { withTenant } from "@/lib/prisma";
 
@@ -11,11 +12,11 @@ const documentPhases = new Set<OrderPhase>([OrderPhase.DRAFT, OrderPhase.IN_PROD
 const certificationPhases = new Set<OrderPhase>([OrderPhase.IN_PRODUCTION, OrderPhase.COMPLETED]);
 
 function planner(roles: { role: RoleName }[]) {
-  return hasRole(roles, RoleName.OWNER) || hasRole(roles, RoleName.PRODUCTION_MANAGER);
+  return RoleEngine.canPlan(roles);
 }
 
 function certifier(roles: { role: RoleName }[]) {
-  return hasRole(roles, RoleName.OWNER) || hasRole(roles, RoleName.QUALITY_MANAGER);
+  return RoleEngine.canCertify(roles);
 }
 
 async function fileBytes(formData: FormData): Promise<{ name: string; bytes: Uint8Array } | null> {

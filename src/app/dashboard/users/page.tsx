@@ -1,16 +1,17 @@
 import { redirect } from "next/navigation";
 import { RoleName } from "@prisma/client";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { t } from "@/lib/i18n";
 import { withTenant } from "@/lib/prisma";
 import { assignRole, inviteUser, revokeInvitation, revokeRole, revokeUser } from "@/server/membership-actions";
 import { InviteForm } from "@/app/dashboard/users/invite-form";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 const roleNames = Object.values(RoleName);
 
 export default async function UsersPage() {
   const { session, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER)) redirect("/dashboard");
+  if (!RoleEngine.isOwner(activeRoles)) redirect("/dashboard");
 
   const [users, invitations] = await withTenant(session.companyId, (tx) => Promise.all([
     tx.user.findMany({

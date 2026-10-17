@@ -1,18 +1,18 @@
-import { RoleName } from "@prisma/client";
 import { redirect } from "next/navigation";
 import { AlarmSounds } from "@/app/dashboard/company/alarm-sounds";
 import { OwnerFrame } from "@/app/dashboard/owner-home";
 import { companyLogoSrc } from "@/app/dashboard/company-mark";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { t } from "@/lib/i18n";
 import { personName, positionLabel, todayLabel } from "@/lib/session-identity";
 import { saveCompanyDesk } from "@/server/company-actions";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 const sloganField = "h-10 w-full rounded-lg border border-white/15 bg-[#0b1830] px-3 text-slate-100 outline-none normal-case [color-scheme:dark]";
 
 export default async function CompanyDeskPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { user, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER)) redirect("/dashboard");
+  if (!RoleEngine.isOwner(activeRoles)) redirect("/dashboard");
   const { error } = await searchParams;
   const company = user.company;
   return (

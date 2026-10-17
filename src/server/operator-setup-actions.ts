@@ -3,9 +3,10 @@
 import { AuditAction, AuditSubjectType, RoleName } from "@prisma/client";
 import { redirect } from "next/navigation";
 import { recordAudit } from "@/lib/audit";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { hashPassword } from "@/lib/password";
 import { prisma, withTenant } from "@/lib/prisma";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 /** Login id stored in User.email (auth lookup key). Not a mailbox. */
 function slugPart(value: string): string {
@@ -38,7 +39,7 @@ async function uniqueLoginId(base: string): Promise<string> {
 
 export async function createOperator(_state: string | null, formData: FormData): Promise<string | null> {
   const { session, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER)) return "auth.invalidCredentials";
+  if (!RoleEngine.isOwner(activeRoles)) return "auth.invalidCredentials";
   const firstName = String(formData.get("firstName") ?? "").trim();
   const lastName = String(formData.get("lastName") ?? "").trim();
   const password = String(formData.get("password") ?? "");

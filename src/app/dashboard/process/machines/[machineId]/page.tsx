@@ -1,22 +1,26 @@
-import { OrderPhase, type Prisma, RoleName, TimeUnit } from "@prisma/client";
+import { OrderPhase, type Prisma, TimeUnit } from "@prisma/client";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { efficiencySeries, qualityIndexSeries, remainingSeries, scrapRiskSeries, toolRiskSeries } from "@/app/dashboard/page";
 import { MachineGauge, SelectedOrder } from "@/app/dashboard/gauge-visual";
 import { OwnerFrame, Tile, coverageRing, deliveryNote, efficiencyNote, efficiencyPrimary, efficiencyRing, efficiencyStatus, efficiencyTone, gaugeOf, materialNote, materialStatus, materialTone, qualityNote, qualityOperationalStatus, qualityOperationalTone, qualityRing, qualityScore, riskRing, scrapNote, scrapStatus, scrapTone, toolNote, toolStatus, toolTone } from "@/app/dashboard/owner-home";
-import { hasRole, requireMember } from "@/lib/access";
+import { requireMember } from "@/lib/access";
 import { personName, positionLabel } from "@/lib/session-identity";
 import { capability } from "@/lib/capability";
 import { type CopilotSignal } from "@/lib/copilot";
 import { companySignals } from "@/lib/copilot-query";
 import { daysRemaining, deliveryProbability, type DeliveryQuality, type RiskLevel } from "@/lib/delivery-probability";
-import { orderEconomics } from "@/lib/economics";
-import { interpretQuality, qualityPercentFromCpk } from "@/lib/quality-evaluation";
+import { orderEconomics, productionProgressPercent } from "@/lib/economics";
+import { formatCapability, formatPercent, formatQualityScore } from "@/lib/kpi/kpi-formatting";
+import { StatisticsEngine } from "@/lib/statistics/statistics-engine";
+import { SPCEngine } from "@/lib/spc/spc-engine";
+import { interpretQuality } from "@/lib/quality-evaluation";
 import { resolveQualityThresholds } from "@/lib/quality-thresholds";
 import { t } from "@/lib/i18n";
 import { liveProcessGauge } from "@/lib/live-gauge";
 import { withTenant } from "@/lib/prisma";
 import { setActiveOrder } from "@/server/floor-actions";
+import { RoleEngine } from "@/lib/auth/role-engine";
 
 const shell = "rounded-2xl border border-white/10 bg-[#0b1830]/75 shadow-[0_16px_40px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.07),0_0_24px_rgba(60,240,255,0.05)] backdrop-blur";
 const contextCard = "relative flex h-[280px] flex-col overflow-hidden rounded-xl border border-white/15 bg-[#050d18] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_18px_50px_rgba(0,0,0,0.45)]";
@@ -25,7 +29,7 @@ const sectionTitle = "text-[12px] uppercase tracking-[0.16em] text-slate-400";
 export default async function MachineWorkspacePage({ params }: { params: Promise<{ machineId: string }> }) {
   const { machineId } = await params;
   const { session, user, activeRoles } = await requireMember();
-  if (!hasRole(activeRoles, RoleName.OWNER) && !hasRole(activeRoles, RoleName.PRODUCTION_MANAGER)) redirect("/dashboard");
+  if (!RoleEngine.canPlan(activeRoles)) redirect("/dashboard");
   const signals = await companySignals(session.companyId, user.company.timeUnit);
   const picture = await withTenant(session.companyId, async (tx) => {
     const machine = await tx.machine.findFirst({ where: { id: machineId, companyId: session.companyId, hiddenAt: null } });
@@ -131,7 +135,7 @@ export default async function MachineWorkspacePage({ params }: { params: Promise
               <Tile hint={t("dashboard.hint.scrap")} label={t("dashboard.slot.scrap")} value={reading.scrapValue ?? t("dashboard.noData")} status={scrapStatus(orderSignals)} tone={scrapTone(orderSignals)} points={reading.scrapPoints} gauge={gaugeOf(reading.scrapValue)} note={scrapNote(reading.scrapProduced, reading.scrapPieces)} ring={riskRing(gaugeOf(reading.scrapValue))} />
               <Tile hint={t("dashboard.hint.efficiency")} label={t("dashboard.slot.production")} value={efficiencyPrimary(reading.efficiencyView)} status={efficiencyStatus(reading.efficiencyView.ratio)} tone={efficiencyTone(reading.efficiencyView.ratio)} note={efficiencyNote(reading.efficiencyView, user.company.timeUnit)} points={reading.efficiencyPoints} ring={efficiencyRing(reading.efficiencyView.percent)} />
               <Tile hint={t("dashboard.hint.tools")} label={t("dashboard.slot.tools")} value={String(reading.toolCount)} status={toolStatus(orderSignals, reading.toolCount)} tone={toolTone(orderSignals, reading.toolCount)} points={reading.toolPoints} note={toolNote(reading.toolActive, reading.toolReplaced)} ring={riskRing(reading.toolRisk)} />
-              <Tile hint={t("dashboard.hint.materials")} label={t("dashboard.slot.materials")} value={reading.materialCoverage === null ? t("dashboard.noData") : `${Math.round(reading.materialCoverage)}%`} status={materialStatus(orderSignals)} tone={materialTone(orderSignals)} points={reading.materialPoints} relative note={materialNote(reading.materialRemaining, reading.materialUsed, reading.materialUnit)} ring={coverageRing(reading.materialCoverage)} />
+              <Tile hint={t("dashboard.hint.materials")} label={t("dashboard.slot.materials")} value={formatPercent(reading.materialCoverage) ?? t("dashboard.noData")} status={materialStatus(orderSignals)} tone={materialTone(orderSignals)} points={reading.materialPoints} relative note={materialNote(reading.materialRemaining, reading.materialUsed, reading.materialUnit)} ring={coverageRing(reading.materialCoverage)} />
               <Tile hint={t("dashboard.hint.delivery")} label={t("dashboard.slot.delivery")} value={reading.deliveryCard === null ? t("dashboard.noData") : `${reading.deliveryCard.percent}%`} status={reading.deliveryCard === null ? t("dashboard.kpi.empty") : t(`dashboard.kpiLabel.delivery.${reading.deliveryCard.band === "high" ? "high" : reading.deliveryCard.band === "moderate" ? "moderate" : "low"}`)} tone={reading.deliveryCard === null ? "monitor" : reading.deliveryCard.band === "high" ? "good" : reading.deliveryCard.band === "moderate" ? "moderate" : "severe"} points={[]} note={deliveryNote(reading.deliveryCard)} ring={reading.deliveryCard === null ? null : riskRing(reading.deliveryCard.percent)} />
             </>
           ) : null}
@@ -191,7 +195,8 @@ function readOrder(order: LoadedOrder, machineId: string, timeUnit: TimeUnit, co
   const good = order.actual?.goodQuantity ?? 0;
   const scrap = order.scraps.reduce((sum, item) => sum + item.pieceCount, 0);
   const produced = good + scrap;
-  const progress = produced > 0 ? `${Math.round((good / produced) * 100)}%` : t("dashboard.kpi.empty");
+  const progressValue = productionProgressPercent(good, order.targetQuantity);
+  const progress = formatPercent(progressValue) ?? t("dashboard.kpi.empty");
   const machineTimes = order.machineTimes.filter((interval) => interval.machineId === machineId);
   const openInterval = machineTimes.find((interval) => interval.endedAt === null);
   const runtime = openInterval ? Math.max(0, Math.round((now.getTime() - openInterval.startedAt.getTime()) / 60000)) : 0;
@@ -240,7 +245,7 @@ function readOrder(order: LoadedOrder, machineId: string, timeUnit: TimeUnit, co
   const qualityPoints = best?.points ?? [];
   const controls = measured.map(({ control, values }) => {
     const latest = values.at(-1);
-    const outside = latest !== undefined && (latest < Number(control.lowerLimit) || latest > Number(control.upperLimit));
+    const outside = latest !== undefined && SPCEngine.outOfTolerance(latest, Number(control.lowerLimit), Number(control.upperLimit));
     return {
       key: control.id,
       title: control.name,
@@ -250,21 +255,21 @@ function readOrder(order: LoadedOrder, machineId: string, timeUnit: TimeUnit, co
       latest,
     };
   });
-  const qualityState: DeliveryQuality = cpk !== null && thresholds ? interpretQuality(qualityPercentFromCpk(cpk), thresholds.target, thresholds.warningDelta, thresholds.criticalDelta) : null;
+  const qualityState: DeliveryQuality = cpk !== null && thresholds ? interpretQuality(StatisticsEngine.qualityScore(cpk), thresholds.target, thresholds.warningDelta, thresholds.criticalDelta) : null;
   const quality = cpk === null || !thresholds
     ? emptyKpi()
     : {
-      value: `${qualityPercentFromCpk(cpk)}%`,
+      value: formatQualityScore(StatisticsEngine.qualityScore(cpk)) ?? t("dashboard.noData"),
       status: t(`dashboard.kpiLabel.quality.${qualityState ?? "critical"}`),
-      note: `Cpk ${cpk.toFixed(2)}`,
+      note: `Cpk ${formatCapability(cpk)}`,
       color: qualityState === "critical" || qualityState === "poor" ? "#FF4D4F" : qualityState === "moderate" ? "#FF9800" : "#00E676",
-      ring: qualityPercentFromCpk(cpk),
+      ring: StatisticsEngine.qualityScore(cpk),
     };
   const scrapHit = signals.find((signal) => signal.code === "scrapHistory");
   const scrapKpi = produced <= 0
     ? emptyKpi()
     : {
-      value: `${Math.round((scrap / produced) * 100)}%`,
+      value: formatPercent((scrap / produced) * 100) ?? t("dashboard.noData"),
       status: !scrapHit ? t("dashboard.kpiLabel.scrap.low") : scrapHit.severity === "critical" ? t("dashboard.kpiLabel.scrap.high") : t("dashboard.kpiLabel.scrap.moderate"),
       note: `${produced} · ${scrap}`,
       color: !scrapHit ? "#00E676" : scrapHit.severity === "critical" ? "#FF4D4F" : "#FF9800",
@@ -274,7 +279,7 @@ function readOrder(order: LoadedOrder, machineId: string, timeUnit: TimeUnit, co
   const efficiency = ratio === null
     ? emptyKpi()
     : {
-      value: ratio > 2 ? `${trim(ratio)}×` : `${Math.round(ratio * 100)}%`,
+      value: formatPercent(ratio * 100) ?? t("dashboard.noData"),
       status: ratio <= 1.1 ? t("dashboard.kpiLabel.efficiency.onTarget") : ratio <= 1.5 ? t("dashboard.kpiLabel.efficiency.watch") : t("dashboard.kpiLabel.efficiency.offTarget"),
       note: `${Math.round(economics?.time.actual ?? 0)} / ${Math.round(economics?.time.estimated ?? 0)}`,
       color: ratio <= 1.1 ? "#00E676" : ratio <= 1.5 ? "#FF9800" : "#FF4D4F",
@@ -297,7 +302,7 @@ function readOrder(order: LoadedOrder, machineId: string, timeUnit: TimeUnit, co
   const materials = coverage === null
     ? emptyKpi()
     : {
-      value: `${Math.round(coverage)}%`,
+      value: formatPercent(coverage) ?? t("dashboard.noData"),
       status: signals.some((signal) => signal.code === "materialSuggestion" && signal.severity === "critical")
         ? t("dashboard.kpiLabel.materials.critical")
         : materialSignal ? t("dashboard.kpiLabel.materials.moderate") : t("dashboard.kpiLabel.materials.good"),
@@ -310,7 +315,7 @@ function readOrder(order: LoadedOrder, machineId: string, timeUnit: TimeUnit, co
   const toolRisk: RiskLevel = toolSignals.some((signal) => signal.severity === "critical") ? "critical" : toolSignals.length > 0 ? "moderate" : "none";
   const deliveryScore = order.plannedDeliveryAt && economics
     ? deliveryProbability({
-      progress: order.targetQuantity > 0 ? good / order.targetQuantity : 0,
+      progress: (productionProgressPercent(good, order.targetQuantity) ?? 0) / 100,
       efficiencyRatio: economics.time.estimated && economics.time.estimated > 0 ? economics.time.actual / economics.time.estimated : null,
       qualityState: qualityForDelivery,
       materialRisk,
@@ -336,13 +341,13 @@ function readOrder(order: LoadedOrder, machineId: string, timeUnit: TimeUnit, co
     ...order.scraps.map((row) => ({ key: row.id, at: row.occurredAt, title: t("process.event.scrap"), detail: order.part.name, color: "#FF4D4F" })),
     ...order.materialConsumptions.map((row) => ({ key: row.id, at: row.occurredAt, title: t("process.event.material"), detail: row.material.name, color: "#3CF0FF" })),
   ].sort((left, right) => right.at.getTime() - left.at.getTime());
-  const cpkText = cpk === null ? null : cpk.toFixed(2);
+  const cpkText = formatCapability(cpk);
   const qualityTarget = thresholds?.target ?? null;
   const qualityWarning = thresholds?.warningDelta ?? null;
   const qualityDelta = thresholds?.criticalDelta ?? null;
-  const scrapValue = produced > 0 ? `${Math.round((scrap / produced) * 100)}%` : null;
+  const scrapValue = formatPercent(produced > 0 ? (scrap / produced) * 100 : null);
   const efficiencyView = economics && economics.time.estimated !== null && economics.time.estimated > 0
-    ? { percent: Math.round((economics.time.actual / economics.time.estimated) * 100), ratio: economics.time.actual / economics.time.estimated, actual: economics.time.actual, estimated: economics.time.estimated }
+    ? { percent: (economics.time.actual / economics.time.estimated) * 100, ratio: economics.time.actual / economics.time.estimated, actual: economics.time.actual, estimated: economics.time.estimated }
     : { percent: null, ratio: null, actual: null, estimated: null };
   const toolCount = toolSignals.length;
   const materialUnit = order.materialConsumptions[0]?.material.unit ?? order.estimate?.materialUses[0]?.material.unit ?? "";

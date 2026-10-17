@@ -2,6 +2,7 @@ import { AuditAction, AuditSubjectType, OrderPhase } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { recordAudit } from "@/lib/audit";
 import { prisma, withTenant, type Db } from "@/lib/prisma";
+import { updateOwned } from "@/lib/tenant-write";
 
 export async function activateDraft(
   tx: Db,
@@ -20,22 +21,19 @@ export async function activateDraft(
   for (const use of order.estimate.toolUses) {
     const tool = await tx.tool.findFirst({ where: { id: use.toolId, companyId } });
     if (!tool) return "common.required";
-    await tx.estimateToolUse.update({ where: { id: use.id }, data: { unitCost: tool.unitCost } });
+    await updateOwned(tx.estimateToolUse, use.id, companyId, { unitCost: tool.unitCost });
   }
   for (const use of order.estimate.materialUses) {
     const material = await tx.material.findFirst({ where: { id: use.materialId, companyId } });
     if (!material) return "common.required";
-    await tx.estimateMaterialUse.update({ where: { id: use.id }, data: { unitCost: material.unitCost } });
+    await updateOwned(tx.estimateMaterialUse, use.id, companyId, { unitCost: material.unitCost });
   }
-  await tx.estimate.update({
-    where: { id: order.estimate.id },
-    data: { hourlyRateSnapshot: order.estimate.machine?.hourlyRate ?? null },
-  });
+  await updateOwned(tx.estimate, order.estimate.id, companyId, { hourlyRateSnapshot: order.estimate.machine?.hourlyRate ?? null });
   await tx.actual.create({
     data: { companyId, productionOrderId: order.id, goodQuantity: 0 },
   });
-  await tx.productionOrder.update({
-    where: { id: order.id },
+  await tx.productionOrder.updateMany({
+    where: { id: order.id, companyId },
     data: {
       phase: OrderPhase.IN_PRODUCTION,
       startedAt,

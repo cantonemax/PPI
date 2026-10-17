@@ -2,12 +2,13 @@ import Link from "next/link";
 import { CompanyBrand } from "@/app/dashboard/company-mark";
 import { DatePill, SessionIdentity } from "@/app/dashboard/session-mark";
 import { t } from "@/lib/i18n";
-import type { DepartmentSpc } from "@/lib/ppi-spc-engine";
 import { isServicePaused } from "@/lib/service-phase";
 import type { CopilotSignal } from "@/lib/copilot";
-import { DepartmentGauge } from "@/app/dashboard/gauge-visual";
 import { InfoTip } from "@/app/dashboard/info-tip";
-import { interpretQuality, qualityPercentFromCpk, type QualityState } from "@/lib/quality-evaluation";
+import { interpretQuality, type QualityState } from "@/lib/quality-evaluation";
+import { StatisticsEngine } from "@/lib/statistics/statistics-engine";
+import type { OwnerDeskView } from "@/lib/owner-desk";
+import { formatCapability, formatCount, formatCurrency, formatDepartmentScore, formatPercent, formatQualityScore } from "@/lib/kpi/kpi-formatting";
 
 type Mosaic = {
   orders: number;
@@ -17,6 +18,7 @@ type Mosaic = {
   qualityTarget: number | null;
   qualityWarning: number | null;
   qualityDelta: number | null;
+  outOfToleranceRate: number | null;
   scrap: string | null;
   scrapRiskSeries: number[];
   scrapProduced: number | null;
@@ -81,8 +83,7 @@ export function OwnerHome({
   certifications,
   qualityPoints,
   mosaic,
-  department,
-  departmentSpc,
+  desk,
 }: {
   companyName: string;
   today: string;
@@ -91,8 +92,7 @@ export function OwnerHome({
   certifications: number;
   qualityPoints: number[];
   mosaic: Mosaic;
-  department: { id: string; name: string; score: number | null }[];
-  departmentSpc: DepartmentSpc;
+  desk: OwnerDeskView;
 }) {
   const critical = signals.filter((signal) => signal.severity === "critical");
   const warning = signals.filter((signal) => signal.severity === "warning");
@@ -104,7 +104,40 @@ export function OwnerHome({
     <OwnerFrame companyName={companyName} today={today} person={person} activeHref="/dashboard">
         <div className="grid gap-3 px-3 py-3 min-[1440px]:grid-cols-[minmax(0,1fr)_300px]">
           <div className="grid gap-3">
-            <DepartmentSpcStrip reading={departmentSpc} />
+            <section className="grid gap-2 min-[900px]:grid-cols-4">
+              <MoneyCard label={t("process.desk.department")} value={formatDepartmentScore(desk.departmentScore)} tone={desk.departmentScore === null ? "#8E9AAB" : desk.departmentScore >= 80 ? "#00E676" : desk.departmentScore >= 60 ? "#FF9800" : "#FF4D4F"} />
+              <MoneyCard label={t("economy.margin")} value={formatCurrency(desk.margin)} tone={desk.margin === null ? "#8E9AAB" : desk.margin < 0 ? "#FF4D4F" : "#00E676"} />
+              <MoneyCard label={t("economy.costDeviation")} value={formatCurrency(desk.costDeviation)} tone={desk.costDeviation > 0 ? "#FF4D4F" : desk.costDeviation < 0 ? "#00E676" : "#8E9AAB"} />
+              <MoneyCard label={t("owner.desk.alerts")} value={formatCount(desk.activeAlerts)} tone={desk.activeAlerts > 0 ? "#FF9800" : "#00E676"} />
+            </section>
+            <section>
+              <h2 className="text-[12px] uppercase tracking-[0.16em] text-slate-400">{t("owner.desk.company")}</h2>
+              <div className="mt-2 grid gap-2 min-[900px]:grid-cols-3">
+                <MoneyCard label={t("spc.averageCpk")} value={formatCapability(desk.averageCpk)} tone="#3CF0FF" />
+                <Tile hint={t("dashboard.hint.efficiency")} label={t("dashboard.slot.production")} value={efficiencyPrimary(mosaic.efficiency)} status={efficiencyStatus(mosaic.efficiency.ratio)} tone={efficiencyTone(mosaic.efficiency.ratio)} note={efficiencyNote(mosaic.efficiency, mosaic.timeUnit)} points={mosaic.efficiencySeries} ring={efficiencyRing(mosaic.efficiency.percent)} />
+                <Tile hint={t("dashboard.hint.scrap")} label={t("dashboard.slot.scrap")} value={mosaic.scrap ?? t("dashboard.noData")} status={scrapStatus(signals)} tone={scrapTone(signals)} points={mosaic.scrapRiskSeries} gauge={gaugeOf(mosaic.scrap)} note={scrapNote(mosaic.scrapProduced, mosaic.scrapPieces)} ring={riskRing(gaugeOf(mosaic.scrap))} />
+              </div>
+            </section>
+            <section className={`${shell} p-3`}>
+              <h2 className="text-[12px] uppercase tracking-[0.16em] text-slate-400">{t("owner.desk.economics")}</h2>
+              <div className="mt-3 max-w-sm">
+                <MoneyCard label={t("toolHistory.articleCost")} value={formatCurrency(desk.toolCostImpact)} tone={desk.toolCostImpact > 0 ? "#FF9800" : "#8E9AAB"} />
+              </div>
+              <h3 className="mt-4 text-[12px] uppercase tracking-[0.16em] text-slate-500">{t("owner.desk.problems")}</h3>
+              {desk.problemOrders.length === 0 ? <p className="mt-2 text-[13px] text-slate-400">{t("owner.desk.none")}</p> : (
+                <ul className="mt-2 flex flex-col gap-2">
+                  {desk.problemOrders.map((order) => (
+                    <li key={order.id}>
+                      <Link href={`/dashboard/orders/${order.id}`} className="grid gap-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 min-[800px]:grid-cols-[minmax(0,1fr)_auto_auto]">
+                        <span className="truncate text-[14px] text-white">{order.part}</span>
+                        <span className="text-[13px] text-slate-300">{t("economy.margin")} {formatCurrency(order.actualMargin) ?? t("economy.absent")}</span>
+                        <span className="text-[13px]" style={{ color: order.costDeviation > 0 ? "#FF4D4F" : "#00E676" }}>{t("economy.costDeviation")} {formatCurrency(order.costDeviation)}</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
             <section className={`${shell} grid items-stretch gap-2 p-3 lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]`}>
               <div className="relative h-full min-h-[280px] overflow-hidden rounded-xl border border-white/15 bg-[#050d18] shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_18px_50px_rgba(0,0,0,0.45),0_0_42px_rgba(60,240,255,0.14)]">
                 <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_70%_0%,rgba(60,240,255,0.2),transparent_46%)]" style={{ animation: "ppi-glow 4.5s ease-in-out infinite" }} />
@@ -122,16 +155,18 @@ export function OwnerHome({
                   <p className="text-[11px] uppercase tracking-[0.08em] text-slate-400">{`${mosaic.machines} ${t("process.machinesOrders")} · ${mosaic.orders} ${t("process.ordersWord")}`}</p>
                 </Link>
               </div>
-              <div className="grid grid-cols-3 gap-2">
-              <Tile hint={t("dashboard.hint.quality")} label={t("dashboard.slot.quality")} value={qualityScore(mosaic.quality)} status={qualityOperationalStatus(mosaic.quality, mosaic.qualityTarget, mosaic.qualityWarning, mosaic.qualityDelta)} tone={qualityOperationalTone(mosaic.quality, mosaic.qualityTarget, mosaic.qualityWarning, mosaic.qualityDelta)} points={qualityPoints} note={qualityNote(mosaic.quality, mosaic.qualityTarget, mosaic.qualityWarning, mosaic.qualityDelta)} ring={qualityRing(mosaic.quality)} />
-              <Tile hint={t("dashboard.hint.scrap")} label={t("dashboard.slot.scrap")} value={mosaic.scrap ?? t("dashboard.noData")} status={scrapStatus(signals)} tone={scrapTone(signals)} points={mosaic.scrapRiskSeries} gauge={gaugeOf(mosaic.scrap)} note={scrapNote(mosaic.scrapProduced, mosaic.scrapPieces)} ring={riskRing(gaugeOf(mosaic.scrap))} />
-              <Tile hint={t("dashboard.hint.efficiency")} label={t("dashboard.slot.production")} value={efficiencyPrimary(mosaic.efficiency)} status={efficiencyStatus(mosaic.efficiency.ratio)} tone={efficiencyTone(mosaic.efficiency.ratio)} note={efficiencyNote(mosaic.efficiency, mosaic.timeUnit)} points={mosaic.efficiencySeries} ring={efficiencyRing(mosaic.efficiency.percent)} />
+              <div className="grid grid-cols-2 gap-2">
+              <Tile hint={t("dashboard.hint.quality")} label={t("dashboard.slot.quality")} value={qualityScore(mosaic.quality)} status={qualityOperationalStatus(mosaic.quality, mosaic.qualityTarget, mosaic.qualityWarning, mosaic.qualityDelta)} tone={qualityOperationalTone(mosaic.quality, mosaic.qualityTarget, mosaic.qualityWarning, mosaic.qualityDelta)} points={qualityPoints} ring={qualityRing(mosaic.quality)} />
               <Tile hint={t("dashboard.hint.tools")} label={t("dashboard.slot.tools")} value={String(mosaic.tools)} status={toolStatus(signals, mosaic.tools)} tone={toolTone(signals, mosaic.tools)} points={mosaic.toolTrend} note={toolNote(mosaic.toolActive, mosaic.toolReplaced)} ring={riskRing(mosaic.toolRisk)} />
-              <Tile hint={t("dashboard.hint.materials")} label={t("dashboard.slot.materials")} value={mosaic.materialCoverage === null ? t("dashboard.noData") : `${Math.round(mosaic.materialCoverage)}%`} status={materialStatus(signals)} tone={materialTone(signals)} points={mosaic.materialTrend} relative note={materialNote(mosaic.materialRemaining, mosaic.materialUsed, mosaic.materialUnit)} ring={coverageRing(mosaic.materialCoverage)} />
-              <Tile hint={t("dashboard.hint.delivery")} label={t("dashboard.slot.delivery")} value={mosaic.delivery === null ? t("dashboard.noData") : `${mosaic.delivery.percent}%`} status={mosaic.delivery === null ? t("dashboard.kpi.empty") : t(`dashboard.kpiLabel.delivery.${mosaic.delivery.band === "high" ? "high" : mosaic.delivery.band === "moderate" ? "moderate" : "low"}`)} tone={mosaic.delivery === null ? "monitor" : mosaic.delivery.band === "high" ? "good" : mosaic.delivery.band === "moderate" ? "moderate" : "severe"} points={mosaic.delivery === null ? [] : mosaic.deliveryTrend} note={deliveryNote(mosaic.delivery)} ring={mosaic.delivery === null ? null : riskRing(mosaic.delivery.percent)} />
+              <Tile hint={t("dashboard.hint.materials")} label={t("dashboard.slot.materials")} value={formatPercent(mosaic.materialCoverage) ?? t("dashboard.noData")} status={materialStatus(signals)} tone={materialTone(signals)} points={mosaic.materialTrend} relative note={materialNote(mosaic.materialRemaining, mosaic.materialUsed, mosaic.materialUnit)} ring={coverageRing(mosaic.materialCoverage)} />
               </div>
             </section>
-            <DepartmentGauge machines={department} />
+            <section>
+              <h2 className="text-[12px] uppercase tracking-[0.16em] text-slate-400">{t("owner.desk.delivery")}</h2>
+              <div className="mt-2 max-w-md">
+                <Tile hint={t("dashboard.hint.delivery")} label={t("dashboard.slot.delivery")} value={mosaic.delivery === null ? t("dashboard.noData") : `${mosaic.delivery.percent}%`} status={mosaic.delivery === null ? t("dashboard.kpi.empty") : t(`dashboard.kpiLabel.delivery.${mosaic.delivery.band === "high" ? "high" : mosaic.delivery.band === "moderate" ? "moderate" : "low"}`)} tone={mosaic.delivery === null ? "monitor" : mosaic.delivery.band === "high" ? "good" : mosaic.delivery.band === "moderate" ? "moderate" : "severe"} points={mosaic.delivery === null ? [] : mosaic.deliveryTrend} note={deliveryNote(mosaic.delivery)} ring={mosaic.delivery === null ? null : riskRing(mosaic.delivery.percent)} />
+              </div>
+            </section>
             <section className="grid grid-cols-3 gap-3">
               <Trend title={t("dashboard.trend.production")} points={mosaic.productionTrend} />
               <Trend title={t("dashboard.trend.quality")} points={qualityPoints} />
@@ -145,7 +180,7 @@ export function OwnerHome({
           </div>
           <aside className="grid content-start gap-3">
             <section id="alerts" className={`${shell} p-3`}>
-              <h2 className="text-[12px] uppercase tracking-[0.16em] text-slate-400">{t("dashboard.alerts")}</h2>
+              <h2 className="text-[12px] uppercase tracking-[0.16em] text-slate-400">{t("owner.desk.risks")}</h2>
               {ranked.length === 0 ? <p className="mt-4 text-center text-[13px] text-slate-400">{t("dashboard.alertsNone")}</p> : (
                 <ul className="mt-2 flex flex-col gap-2">
                   {ranked.map((signal) => (
@@ -218,14 +253,14 @@ export function OwnerFrame({ companyName, today, person, activeHref, children }:
 }
 
 export function efficiencyPrimary(view: Mosaic["efficiency"]) {
-  if (view.ratio === null || view.percent === null) return t("dashboard.noData");
-  return view.ratio > 2 ? `${trimRatio(view.ratio)}×` : `${view.percent}%`;
+  if (view.percent === null) return t("dashboard.noData");
+  return formatPercent(view.percent) ?? t("dashboard.noData");
 }
 
 export function efficiencyNote(view: Mosaic["efficiency"], unit: Mosaic["timeUnit"]) {
   if (view.ratio === null || view.actual === null || view.estimated === null || view.percent === null) return "";
   const suffix = unit === "HOUR" ? "h" : "m";
-  return `${Math.round(view.percent)}% · ${Math.round(view.actual)}${suffix}/${Math.round(view.estimated)}${suffix}`;
+  return `${formatPercent(view.percent)} · ${Math.round(view.actual)}${suffix}/${Math.round(view.estimated)}${suffix}`;
 }
 
 type Tone = "monitor" | "good" | "moderate" | "critical" | "severe";
@@ -234,21 +269,22 @@ export function qualityScore(cpk: string | null) {
   if (cpk === null) return t("dashboard.noData");
   const value = Number(cpk);
   if (!Number.isFinite(value)) return t("dashboard.noData");
-  return `${qualityPercentFromCpk(value)}%`;
+  return formatQualityScore(StatisticsEngine.qualityScore(value)) ?? t("dashboard.noData");
 }
 
 function qualityReading(cpk: string | null, target: number | null, warning: number | null, delta: number | null): QualityState | null {
   if (cpk === null || target === null || warning === null || delta === null) return null;
   const value = Number(cpk);
   if (!Number.isFinite(value)) return null;
-  return interpretQuality(qualityPercentFromCpk(value), target, warning, delta);
+  return interpretQuality(StatisticsEngine.qualityScore(value), target, warning, delta);
 }
 
-export function qualityNote(cpk: string | null, target: number | null, warning: number | null, delta: number | null) {
+export function qualityNote(cpk: string | null, target: number | null, warning: number | null, delta: number | null, outOfToleranceRate: number | null = null) {
   if (cpk === null || !Number.isFinite(Number(cpk))) return "";
-  const index = `Cpk ${Number(cpk).toFixed(2)}`;
-  if (target === null || warning === null || delta === null) return `${t("dashboard.kpi.quality.targetMissing")} · ${index}`;
-  return `${t("dashboard.kpi.quality.target")} ${trimTime(target)}% · ${index}`;
+  const index = `Cpk ${formatCapability(Number(cpk))}`;
+  const rate = outOfToleranceRate === null ? "" : ` · ${t("quality.outOfToleranceRate")} ${formatPercent(outOfToleranceRate)}`;
+  if (target === null || warning === null || delta === null) return `${t("dashboard.kpi.quality.targetMissing")} · ${index}${rate}`;
+  return `${t("dashboard.kpi.quality.target")} ${trimTime(target)}% · ${index}${rate}`;
 }
 
 export function qualityOperationalTone(cpk: string | null, target: number | null, warning: number | null, delta: number | null): Tone {
@@ -339,10 +375,6 @@ export function materialStatus(signals: CopilotSignal[]) {
   return t("dashboard.kpiLabel.materials.good");
 }
 
-function trimRatio(value: number) {
-  return value.toFixed(2).replace(/0$/, "").replace(/\.0$/, "");
-}
-
 function trimTime(value: number) {
   return new Intl.NumberFormat("it-IT", { maximumFractionDigits: 0 }).format(value);
 }
@@ -355,7 +387,7 @@ export function deliveryNote(delivery: Mosaic["delivery"]) {
 
 export function qualityRing(cpk: string | null) {
   if (cpk === null || !Number.isFinite(Number(cpk))) return null;
-  return Math.max(10, Math.min(100, qualityPercentFromCpk(Number(cpk))));
+  return Math.max(10, Math.min(100, StatisticsEngine.qualityScore(Number(cpk))));
 }
 
 export function riskRing(percent: number | null) {
@@ -382,26 +414,12 @@ export function gaugeOf(scrap: string | null) {
 
 const shell = "rounded-2xl border border-white/10 bg-[#0b1830]/75 shadow-[0_16px_40px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.07),0_0_24px_rgba(60,240,255,0.05)] backdrop-blur";
 
-function DepartmentSpcStrip({ reading }: { reading: DepartmentSpc }) {
-  const blank = t("spc.insufficient");
-  const figure = (value: number | null, digits: number) => value === null ? blank : value.toFixed(digits);
-  const cells = [
-    [t("spc.departmentGauge"), figure(reading.gauge, 0)],
-    [t("spc.averageCp"), figure(reading.averageCp, 2)],
-    [t("spc.averageCpk"), figure(reading.averageCpk, 2)],
-    [t("spc.criticalOrders"), reading.gauge === null && reading.criticalOrders === 0 ? blank : String(reading.criticalOrders)],
-    [t("spc.departmentTrend"), reading.trend.length === 0 ? blank : reading.trend.map((value) => Math.round(value)).join(" · ")],
-    [t("spc.topRisks"), reading.risks.length === 0 ? blank : reading.risks.map((risk) => `${risk.label} ${risk.cpk.toFixed(2)}`).join(" · ")],
-  ];
+function MoneyCard({ label, value, tone }: { label: string; value: string | null; tone: string }) {
   return (
-    <section className={`${shell} grid gap-2 p-3 sm:grid-cols-2 xl:grid-cols-3`}>
-      {cells.map(([label, value]) => (
-        <div key={label} className="rounded-xl border border-white/10 bg-[#050d18] px-3 py-3">
-          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">{label}</p>
-          <p className="mt-2 text-2xl font-semibold leading-tight text-white">{value}</p>
-        </div>
-      ))}
-    </section>
+    <div className="rounded-xl border border-white/10 bg-[#050d18] px-3 py-3">
+      <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">{label}</p>
+      <p className="mt-2 text-[28px] font-semibold leading-none" style={{ color: tone }}>{value ?? t("dashboard.kpi.empty")}</p>
+    </div>
   );
 }
 

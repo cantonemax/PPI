@@ -9,12 +9,13 @@ export async function recordAudit(
     action: AuditAction;
     subjectType: AuditSubjectType;
     subjectId: string;
+    actorKind?: AuditActorKind;
   },
 ): Promise<void> {
   await db.auditEvent.create({
     data: {
       companyId: input.companyId,
-      actorKind: AuditActorKind.USER,
+      actorKind: input.actorKind ?? AuditActorKind.USER,
       actorUserId: input.actorUserId,
       action: input.action,
       subjectType: input.subjectType,

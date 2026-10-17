@@ -1,11 +1,12 @@
 import { RoleName } from "@prisma/client";
 import { redirect } from "next/navigation";
+import { RoleEngine } from "@/lib/auth/role-engine";
 import { withTenant } from "@/lib/prisma";
 import { readSession } from "@/lib/session";
 
 export async function requireMember() {
   const session = await readSession();
-  if (!session || session.kind === "platform") redirect("/login");
+  if (!session || RoleEngine.isPlatform(session)) redirect("/login");
 
   const user = await withTenant(session.companyId, (tx) => tx.user.findFirst({
     where: {
@@ -29,11 +30,20 @@ export async function requireMember() {
 }
 
 export function hasRole(roles: { role: RoleName }[], role: RoleName): boolean {
-  return roles.some((item) => item.role === role);
+  switch (role) {
+    case RoleName.OWNER:
+      return RoleEngine.isOwner(roles);
+    case RoleName.PRODUCTION_MANAGER:
+      return RoleEngine.isProductionManager(roles);
+    case RoleName.QUALITY_MANAGER:
+      return RoleEngine.isQuality(roles);
+    case RoleName.OPERATOR:
+      return RoleEngine.isOperator(roles);
+  }
 }
 
 export function canSeeEconomics(roles: { role: RoleName; economicAuthority: boolean }[]): boolean {
-  return roles.some((item) => item.role === RoleName.OWNER || (item.role === RoleName.PRODUCTION_MANAGER && item.economicAuthority));
+  return RoleEngine.hasEconomyAccess(roles);
 }
 
 /** Re-export client-safe voice policy (OWNER-only). See @/lib/voice-policy. */

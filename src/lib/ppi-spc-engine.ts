@@ -1,11 +1,10 @@
 import type { ProcessDiagnosis, ProcessState } from "@/lib/process-gauge";
+import { SPCEngine } from "@/lib/spc/spc-engine";
+import { StatisticsEngine } from "@/lib/statistics/statistics-engine";
 import type { ActionContext, Prediction } from "@/lib/prediction";
 import { recommendAction, type RecommendedAction } from "@/lib/recommended-action";
 
 export const SPC_MIN_SAMPLE = 5;
-const MR_D2 = 1.128;
-const MR_D4 = 3.267;
-
 export type SpcTrend = "stable" | "up" | "down";
 export type SpcRisk = "none" | "attention" | "critical";
 
@@ -57,19 +56,17 @@ export function evaluateSpc(input: SpcInput): SpcResult {
   if (sampleSize < SPC_MIN_SAMPLE || !(input.toleranceMax > input.toleranceMin)) {
     return emptyResult(sampleSize, context);
   }
-  const mean = average(values);
-  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (sampleSize - 1);
-  const sigma = Math.sqrt(variance);
+  const mean = StatisticsEngine.mean(values);
+  const variance = StatisticsEngine.variance(values);
+  const sigma = StatisticsEngine.standardDeviation(values);
   const range = Math.max(...values) - Math.min(...values);
-  const moving = movingRanges(values);
-  const mrBar = moving.length > 0 ? average(moving) : 0;
-  const sigmaMr = mrBar / MR_D2;
+  const movingChart = SPCEngine.movingRange(values);
+  const sigmaMr = SPCEngine.individualsChart(values).sigmaEstimate;
   const centerSigma = sigmaMr > 0 ? sigmaMr : sigma;
   const ucl = mean + 3 * centerSigma;
   const lcl = mean - 3 * centerSigma;
-  const capable = sigma > 0;
-  const cp = capable ? (input.toleranceMax - input.toleranceMin) / (6 * sigma) : null;
-  const cpk = capable ? Math.min((input.toleranceMax - mean) / (3 * sigma), (mean - input.toleranceMin) / (3 * sigma)) : null;
+  const cp = StatisticsEngine.cp(sigma, input.toleranceMin, input.toleranceMax);
+  const cpk = StatisticsEngine.cpk(mean, sigma, input.toleranceMin, input.toleranceMax);
   const window = values.slice(input.trendMarker ?? 0);
   const slope = window.length >= 2 ? linearSlope(window) : 0;
   const half = (input.toleranceMax - input.toleranceMin) / 2;
@@ -93,11 +90,12 @@ export function evaluateSpc(input: SpcInput): SpcResult {
     slope,
     thermal: context.thermal && (input.machineRuntime ?? 0) >= 240,
   });
-  const state: ProcessState = outside || diagnosis === "PROCESS_OUT_OF_CONTROL" ? "CRITICAL" : score === null ? "ATTENTION" : score >= 80 ? "STABLE" : score >= 60 ? "ATTENTION" : "CRITICAL";
+  const state: ProcessState = diagnosis === "PROCESS_OUT_OF_CONTROL" ? "CRITICAL" : score === null ? "ATTENTION" : score >= 80 ? "STABLE" : score >= 60 ? "ATTENTION" : "CRITICAL";
   const interval = input.checkInterval ?? 20;
   const prediction = predict(input, mean, sigma, slope, interval, context);
   const recommendation = recommendAction(diagnosis, score ?? 0, { ...context, slope, outside });
-  const risk: SpcRisk = state === "CRITICAL" || (cpk !== null && cpk < 1) ? "critical" : state === "ATTENTION" || (cpk !== null && cpk < 1.33) ? "attention" : "none";
+  const processRisk = SPCEngine.activeSpcRisk(values, input.toleranceMin, input.toleranceMax);
+  const risk: SpcRisk | null = processRisk === "attention" ? "critical" : processRisk;
   return {
     ready: true,
     sampleSize,
@@ -111,8 +109,8 @@ export function evaluateSpc(input: SpcInput): SpcResult {
     slope,
     ucl,
     lcl,
-    mrUcl: moving.length > 0 ? MR_D4 * mrBar : null,
-    imr: values.map((value, index) => ({ index, value, movingRange: index === 0 ? null : Math.abs(value - values[index - 1]) })),
+    mrUcl: movingChart.points.length > 0 ? movingChart.ucl : null,
+    imr: values.map((value, index) => ({ index, value, movingRange: index === 0 ? null : movingChart.points[index - 1] })),
     gauge: { score, state, diagnosis },
     prediction,
     recommendation,
@@ -249,7 +247,7 @@ function diagnose(flags: {
   slope: number;
   thermal: boolean;
 }): ProcessDiagnosis {
-  if (flags.outside || flags.score < 40) return "PROCESS_OUT_OF_CONTROL";
+  if (flags.score < 40) return "PROCESS_OUT_OF_CONTROL";
   if (flags.toolLife < 20 && flags.drifting && flags.increasing) return "TOOL_WEAR_SUSPECTED";
   if (flags.thermal) return "THERMAL_DRIFT_DETECTED";
   if (flags.increasing) return "INCREASING_VARIABILITY";
@@ -296,12 +294,6 @@ function thermalRun(values: number[]) {
   return up || down;
 }
 
-function movingRanges(values: number[]) {
-  const ranges: number[] = [];
-  for (let index = 1; index < values.length; index += 1) ranges.push(Math.abs(values[index] - values[index - 1]));
-  return ranges;
-}
-
 function linearSlope(values: number[]) {
   const count = values.length;
   const meanX = (count - 1) / 2;
@@ -317,8 +309,7 @@ function linearSlope(values: number[]) {
 
 function standardDeviation(values: number[]) {
   if (values.length < 2) return 0;
-  const mean = average(values);
-  return Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1));
+  return StatisticsEngine.standardDeviation(values);
 }
 
 function average(values: number[]) {
